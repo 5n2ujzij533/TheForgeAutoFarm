@@ -16,11 +16,11 @@ local Config = {
     AttackDistance = 8,
     
     -- Sky Hop Settings
-    SkyHeight = 500,       -- How high to fly
+    SkyHeight = 500,       
     
     -- Variables controlled by GUI
     MainEnabled = false,       
-    TravelSpeed = 300,     -- Faster speed is usually safe in the sky
+    TravelSpeed = 300,     
     InstantTP_Range = 70,
 }
 
@@ -113,11 +113,11 @@ local function FindTarget()
     return nil
 end
 
--- === NEW: SKY HOP MOVE ===
+
 local function SkyHopMove(RootPart, GoalPos, DeltaTime)
     local CurrentPos = RootPart.Position
     
-    -- 1. CLOSE RANGE CHECK: If close enough, just TP directly
+    -- CLOSE RANGE CHECK: If close enough, just TP directly
     local Diff = GoalPos - CurrentPos
     local Dist = vector.magnitude(Diff)
     
@@ -126,29 +126,26 @@ local function SkyHopMove(RootPart, GoalPos, DeltaTime)
         return true -- Arrived
     end
     
-    -- 2. VERTICAL CHECK: Are we high enough?
+    -- VERTICAL CHECK
     if CurrentPos.y < Config.SkyHeight - 10 then
-        -- We are low. Teleport UP instantly.
-        -- We keep current X/Z but change Y to SkyHeight
         RootPart.CFrame = CFrame.new(CurrentPos.x, Config.SkyHeight, CurrentPos.z)
         RootPart.Velocity = vector.zero
         return false
     end
     
-    -- 3. HORIZONTAL CHECK: Are we above the target?
-    -- Calculate distance ignoring Y axis (Flat distance)
+    -- HORIZONTAL CHECK
+
     local FlatDiff = vector.create(GoalPos.x - CurrentPos.x, 0, GoalPos.z - CurrentPos.z)
     local FlatDist = vector.magnitude(FlatDiff)
     
     if FlatDist < 15 then
-        -- We are basically above the target. DROP DOWN instantly.
+
         RootPart.CFrame = CFrame.new(GoalPos.x, GoalPos.y, GoalPos.z)
         RootPart.Velocity = vector.zero
-        -- We return false so the next loop hits the "Close Range Check" and returns true
         return false 
     end
     
-    -- 4. TRAVEL: Slide horizontally at Sky Height
+    -- Slide horizontally at Sky Height
     local Step = Config.TravelSpeed * DeltaTime
     local Direction = vector.normalize(FlatDiff)
     local MoveVec = Direction * Step
@@ -274,7 +271,7 @@ RunService.Render:Connect(function()
             end
         end
 
-        -- Lava Button
+        -- Lava TP
         Y_Offset = Y_Offset + 5
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), UI.LavaColor, 1)
         DrawingImmediate.OutlinedText(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, UI.TextColor, 1, "Teleport to Lava (use cannon if get tpback)", true, nil)
@@ -303,7 +300,7 @@ RunService.Render:Connect(function()
                 local Dist = vector.magnitude(Diff)
                 
                 if Dist > Config.AttackDistance then
-                    -- USE SKY HOP NOW
+
                     SkyHopMove(MyRoot, GoalPos, DeltaTime)
                 else
                     local LookAt = Vector3.new(MobPos.x, MobPos.y, MobPos.z)
