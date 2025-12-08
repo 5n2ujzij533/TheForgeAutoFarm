@@ -41,7 +41,8 @@ local UI = {
     TextColor = Color3.fromRGB(255, 255, 255),
     OnColor = Color3.fromRGB(0, 255, 100),
     OffColor = Color3.fromRGB(255, 50, 50),
-    BtnColor = Color3.fromRGB(60, 60, 60)
+    BtnColor = Color3.fromRGB(60, 60, 60),
+    LavaColor = Color3.fromRGB(255, 100, 0) -- Added Lava Color
 }
 
 local LocalPlayer = Players.LocalPlayer
@@ -186,8 +187,11 @@ RunService.Render:Connect(function()
     end
 
     if UI.Visible then
-        local ListHeight = #MobList * 22
-        local TotalHeight = UI.BaseHeight + ListHeight + 20
+        -- FIXED: Calculate height using at least 1 item slot if list is empty to prevent squashing
+        local ItemCount = math.max(1, #MobList) 
+        local ListHeight = ItemCount * 22
+        local LavaButtonHeight = 35 
+        local TotalHeight = UI.BaseHeight + ListHeight + 20 + LavaButtonHeight
         
         -- BG
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, TotalHeight, 0), UI.BgColor, 0.95)
@@ -260,6 +264,8 @@ RunService.Render:Connect(function()
 
         if #MobList == 0 then
              DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, Color3.fromRGB(100,100,100), 1, "(Click Refresh to Scan)", false, nil)
+             -- FIXED: Add spacing here so the next button doesn't overlap the text
+             Y_Offset = Y_Offset + 22 
         else
             for i = 1, #MobList do
                 local MobName = MobList[i]
@@ -275,6 +281,21 @@ RunService.Render:Connect(function()
                 end
                 
                 Y_Offset = Y_Offset + 22
+            end
+        end
+
+        -- [ TELEPORT TO LAVA BUTTON ]
+        Y_Offset = Y_Offset + 5
+        DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), UI.LavaColor, 1)
+        DrawingImmediate.OutlinedText(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, UI.TextColor, 1,  "Teleport to Lava (Sometime it tpback)", true, nil)
+        
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
+            local Character = LocalPlayer.Character
+            if Character and Character:FindFirstChild("HumanoidRootPart") then
+                local Root = Character.HumanoidRootPart
+                -- 387, 65, 72
+                Root.CFrame = CFrame.new(387, 65, 72)
+                Root.Velocity = vector.zero
             end
         end
     end
