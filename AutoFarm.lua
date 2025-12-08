@@ -15,34 +15,32 @@ local Config = {
     UnderOffset = 8,
     AttackDistance = 8,
     
-    -- Settings
+    -- Sky Hop Settings
+    SkyHeight = 500,       -- How high to fly
+    
+    -- Variables controlled by GUI
     MainEnabled = false,       
-    TravelSpeed = 100,
+    TravelSpeed = 300,     -- Faster speed is usually safe in the sky
     InstantTP_Range = 70,
 }
 
 local UI = {
-    -- Window State
     X = 100, Y = 100,
     Width = 250, 
     BaseHeight = 160, 
     Visible = true,
     
-    -- Dragging State
+    ToggleBtn = { X = 0, Y = 300, W = 40, H = 40 },
     Dragging = false,
     DragOffset = {x = 0, y = 0},
-
-    -- Side Toggle
-    ToggleBtn = { X = 0, Y = 300, W = 40, H = 40 },
     
-    -- Colors
     BgColor = Color3.fromRGB(30, 30, 30),
     HeaderColor = Color3.fromRGB(45, 45, 45),
     TextColor = Color3.fromRGB(255, 255, 255),
     OnColor = Color3.fromRGB(0, 255, 100),
     OffColor = Color3.fromRGB(255, 50, 50),
     BtnColor = Color3.fromRGB(60, 60, 60),
-    LavaColor = Color3.fromRGB(255, 100, 0) -- Added Lava Color
+    LavaColor = Color3.fromRGB(255, 100, 0)
 }
 
 local LocalPlayer = Players.LocalPlayer
@@ -52,10 +50,6 @@ local MouseState = { WasPressed = false }
 -- ============================================================================
 -- 2. HELPER FUNCTIONS
 -- ============================================================================
-
-local function DebugLog(msg)
-    print("[DEBUG]: " .. tostring(msg))
-end
 
 local function IsMouseInRect(MousePos, RectX, RectY, RectW, RectH)
     return MousePos.x >= RectX and MousePos.x <= RectX + RectW and
@@ -78,10 +72,7 @@ end
 
 local function RefreshMobList()
     local Folder = Workspace:FindFirstChild(Config.TargetFolder)
-    if not Folder then 
-        MobList = {} 
-        return 
-    end
+    if not Folder then MobList = {} return end
     
     local Unique = {}
     local NewList = {}
@@ -98,7 +89,6 @@ local function RefreshMobList()
             end
         end
     end
-    
     table.sort(NewList)
     MobList = NewList
 end
@@ -114,7 +104,6 @@ end
 local function FindTarget()
     local LivingFolder = Workspace:FindFirstChild(Config.TargetFolder)
     if not LivingFolder then return nil end
-    
     for _, Mob in ipairs(LivingFolder:GetChildren()) do
         local BaseName = GetBaseName(Mob.Name)
         if EnabledMobs[BaseName] == true and IsAlive(Mob) then
@@ -124,23 +113,51 @@ local function FindTarget()
     return nil
 end
 
-local function SmartMove(RootPart, GoalPos, DeltaTime)
+-- === NEW: SKY HOP MOVE ===
+local function SkyHopMove(RootPart, GoalPos, DeltaTime)
     local CurrentPos = RootPart.Position
+    
+    -- 1. CLOSE RANGE CHECK: If close enough, just TP directly
     local Diff = GoalPos - CurrentPos
     local Dist = vector.magnitude(Diff)
     
     if Dist <= Config.InstantTP_Range then
         RootPart.CFrame = CFrame.new(GoalPos.x, GoalPos.y, GoalPos.z)
-        return true
+        return true -- Arrived
     end
     
+    -- 2. VERTICAL CHECK: Are we high enough?
+    if CurrentPos.y < Config.SkyHeight - 10 then
+        -- We are low. Teleport UP instantly.
+        -- We keep current X/Z but change Y to SkyHeight
+        RootPart.CFrame = CFrame.new(CurrentPos.x, Config.SkyHeight, CurrentPos.z)
+        RootPart.Velocity = vector.zero
+        return false
+    end
+    
+    -- 3. HORIZONTAL CHECK: Are we above the target?
+    -- Calculate distance ignoring Y axis (Flat distance)
+    local FlatDiff = vector.create(GoalPos.x - CurrentPos.x, 0, GoalPos.z - CurrentPos.z)
+    local FlatDist = vector.magnitude(FlatDiff)
+    
+    if FlatDist < 15 then
+        -- We are basically above the target. DROP DOWN instantly.
+        RootPart.CFrame = CFrame.new(GoalPos.x, GoalPos.y, GoalPos.z)
+        RootPart.Velocity = vector.zero
+        -- We return false so the next loop hits the "Close Range Check" and returns true
+        return false 
+    end
+    
+    -- 4. TRAVEL: Slide horizontally at Sky Height
     local Step = Config.TravelSpeed * DeltaTime
-    local Direction = vector.normalize(Diff)
+    local Direction = vector.normalize(FlatDiff)
     local MoveVec = Direction * Step
     local NewPos = CurrentPos + MoveVec
     
-    RootPart.CFrame = CFrame.new(NewPos.x, NewPos.y, NewPos.z)
+    -- Maintain SkyHeight while moving
+    RootPart.CFrame = CFrame.new(NewPos.x, Config.SkyHeight, NewPos.z)
     RootPart.Velocity = vector.zero
+    
     return false
 end
 
@@ -154,19 +171,15 @@ RunService.Render:Connect(function()
     local IsLeftDown = false
     if isleftpressed then IsLeftDown = isleftpressed() end
 
-    ---------------------------------------------------------------------------
-    -- DRAG LOGIC
-    ---------------------------------------------------------------------------
+    -- Drag Logic
     if IsLeftDown then
         if not UI.Dragging then
-            -- Check if clicking header to start drag
             if UI.Visible and IsMouseInRect(MousePos, UI.X, UI.Y, UI.Width, 30) then
                 UI.Dragging = true
                 UI.DragOffset.x = MousePos.x - UI.X
                 UI.DragOffset.y = MousePos.y - UI.Y
             end
         else
-            -- Update Position
             UI.X = MousePos.x - UI.DragOffset.x
             UI.Y = MousePos.y - UI.DragOffset.y
         end
@@ -174,10 +187,7 @@ RunService.Render:Connect(function()
         UI.Dragging = false
     end
 
-    ---------------------------------------------------------------------------
-    -- DRAW GUI
-    ---------------------------------------------------------------------------
-    
+    -- Draw GUI
     local ToggleColor = UI.Visible and UI.OnColor or UI.OffColor
     DrawingImmediate.FilledRectangle(vector.create(UI.ToggleBtn.X, UI.ToggleBtn.Y, 0), vector.create(UI.ToggleBtn.W, UI.ToggleBtn.H, 0), ToggleColor, 1)
     DrawingImmediate.Text(vector.create(UI.ToggleBtn.X + 10, UI.ToggleBtn.Y + 10, 0), 20, Color3.new(0,0,0), 1, UI.Visible and "<<" or ">>", true, nil)
@@ -187,22 +197,18 @@ RunService.Render:Connect(function()
     end
 
     if UI.Visible then
-        -- FIXED: Calculate height using at least 1 item slot if list is empty to prevent squashing
-        local ItemCount = math.max(1, #MobList) 
+        local ItemCount = math.max(1, #MobList)
         local ListHeight = ItemCount * 22
         local LavaButtonHeight = 35 
         local TotalHeight = UI.BaseHeight + ListHeight + 20 + LavaButtonHeight
         
-        -- BG
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, TotalHeight, 0), UI.BgColor, 0.95)
-        
-        -- Header (Draggable Area)
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, 30, 0), UI.HeaderColor, 1)
-        DrawingImmediate.OutlinedText(vector.create(UI.X + 10, UI.Y + 8, 0), 16, UI.TextColor, 1, "AutoFarm - ENABLE SEVERE FLY", false, nil)
+        DrawingImmediate.OutlinedText(vector.create(UI.X + 10, UI.Y + 8, 0), 16, UI.TextColor, 1, "Mob AutoFarm", false, nil)
         
         local Y_Offset = UI.Y + 35
 
-        -- [ MASTER SWITCH ]
+        -- Master Switch
         local MasterColor = Config.MainEnabled and UI.OnColor or UI.OffColor
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), MasterColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, Color3.new(0,0,0), 1, Config.MainEnabled and "FARMING: ON" or "FARMING: OFF", true, nil)
@@ -213,58 +219,43 @@ RunService.Render:Connect(function()
         end
         Y_Offset = Y_Offset + 30
 
-        -- [ SPEED SETTINGS ]
+        -- Speed
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, UI.TextColor, 1, "Speed: " .. math.floor(Config.TravelSpeed), false, nil)
         
-        -- [-] Left
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 150, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 170, Y_Offset, 0), 14, UI.TextColor, 1, "-", true, nil)
-        if Clicked and IsMouseInRect(MousePos, UI.X + 150, Y_Offset, 40, 18) then 
-            Config.TravelSpeed = math.max(10, Config.TravelSpeed - 5) 
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 150, Y_Offset, 40, 18) then Config.TravelSpeed = math.max(10, Config.TravelSpeed - 5) end
         
-        -- [+] Right
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 200, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 220, Y_Offset, 0), 14, UI.TextColor, 1, "+", true, nil)
-        if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then 
-            Config.TravelSpeed = Config.TravelSpeed + 5 
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then Config.TravelSpeed = Config.TravelSpeed + 5 end
         Y_Offset = Y_Offset + 22
 
-        -- [ RANGE SETTINGS ]
+        -- Range
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, UI.TextColor, 1, "TP Range: " .. math.floor(Config.InstantTP_Range), false, nil)
         
-        -- [-] Left
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 150, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 170, Y_Offset, 0), 14, UI.TextColor, 1, "-", true, nil)
-        if Clicked and IsMouseInRect(MousePos, UI.X + 150, Y_Offset, 40, 18) then 
-            Config.InstantTP_Range = math.max(0, Config.InstantTP_Range - 5) 
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 150, Y_Offset, 40, 18) then Config.InstantTP_Range = math.max(0, Config.InstantTP_Range - 5) end
         
-        -- [+] Right
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 200, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 220, Y_Offset, 0), 14, UI.TextColor, 1, "+", true, nil)
-        if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then 
-            Config.InstantTP_Range = Config.InstantTP_Range + 5 
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then Config.InstantTP_Range = Config.InstantTP_Range + 5 end
         Y_Offset = Y_Offset + 25
 
-        -- [ REFRESH BUTTON ]
+        -- Refresh
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 20, 0), Color3.fromRGB(80, 80, 150), 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 3, 0), 14, UI.TextColor, 1, "Refresh Mob List", true, nil)
         
-        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 20) then
-            RefreshMobList()
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 20) then RefreshMobList() end
         Y_Offset = Y_Offset + 25
 
-        -- [ LIST ]
+        -- List
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, Color3.fromRGB(150,150,150), 1, "Click Name to Enable:", false, nil)
-        Y_Offset = Y_Offset + 18
+        Y_Offset = Y_Offset + 22
 
         if #MobList == 0 then
              DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, Color3.fromRGB(100,100,100), 1, "(Click Refresh to Scan)", false, nil)
-             -- FIXED: Add spacing here so the next button doesn't overlap the text
              Y_Offset = Y_Offset + 22 
         else
             for i = 1, #MobList do
@@ -279,30 +270,26 @@ RunService.Render:Connect(function()
                     EnabledMobs[MobName] = not EnabledMobs[MobName]
                     CurrentTarget = nil 
                 end
-                
                 Y_Offset = Y_Offset + 22
             end
         end
 
-        -- [ TELEPORT TO LAVA BUTTON ]
+        -- Lava Button
         Y_Offset = Y_Offset + 5
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), UI.LavaColor, 1)
-        DrawingImmediate.OutlinedText(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, UI.TextColor, 1,  "Teleport to Lava (Sometime it tpback)", true, nil)
+        DrawingImmediate.OutlinedText(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, UI.TextColor, 1, "Teleport to Lava (use cannon if get tpback)", true, nil)
         
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
             local Character = LocalPlayer.Character
             if Character and Character:FindFirstChild("HumanoidRootPart") then
                 local Root = Character.HumanoidRootPart
-                -- 387, 65, 72
                 Root.CFrame = CFrame.new(387, 65, 72)
                 Root.Velocity = vector.zero
             end
         end
     end
 
-    ---------------------------------------------------------------------------
-    -- FARM LOGIC
-    ---------------------------------------------------------------------------
+    -- Logic
     if Config.MainEnabled then
         local Character = LocalPlayer.Character
         if Character and Character:FindFirstChild("HumanoidRootPart") then
@@ -316,7 +303,8 @@ RunService.Render:Connect(function()
                 local Dist = vector.magnitude(Diff)
                 
                 if Dist > Config.AttackDistance then
-                    SmartMove(MyRoot, GoalPos, DeltaTime)
+                    -- USE SKY HOP NOW
+                    SkyHopMove(MyRoot, GoalPos, DeltaTime)
                 else
                     local LookAt = Vector3.new(MobPos.x, MobPos.y, MobPos.z)
                     local Pos = Vector3.new(GoalPos.x, GoalPos.y, GoalPos.z)
