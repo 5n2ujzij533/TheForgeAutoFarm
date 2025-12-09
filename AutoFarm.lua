@@ -22,6 +22,7 @@ local Config = {
     MainEnabled = false,       
     TravelSpeed = 300,     
     InstantTP_Range = 70,
+    AutoEquip = false 
 }
 
 local UI = {
@@ -46,6 +47,8 @@ local UI = {
 local LocalPlayer = Players.LocalPlayer
 local CurrentTarget = nil
 local MouseState = { WasPressed = false }
+local EquipDebounce = 0
+local GoingToLava = false -- State for Lava Travel
 
 -- ============================================================================
 -- 2. HELPER FUNCTIONS
@@ -79,7 +82,6 @@ local function RefreshMobList()
     
     for _, Child in ipairs(Folder:GetChildren()) do
         if Players:FindFirstChild(Child.Name) then continue end
-        
         if Child.ClassName == "Model" and Child:FindFirstChild("Humanoid") then
             local BaseName = GetBaseName(Child.Name)
             if not Unique[BaseName] then
@@ -113,45 +115,55 @@ local function FindTarget()
     return nil
 end
 
+local function CheckAutoEquip(Character)
+    if not Config.AutoEquip then return end
+    if os.clock() - EquipDebounce < 1 then return end
+    
+    if not Character:FindFirstChild("Weapon") then
+        local Backpack = LocalPlayer.Backpack
+        if Backpack and Backpack:FindFirstChild("Weapon") then
+            if keypress then
+                keypress(50) 
+                keyrelease(50)
+                EquipDebounce = os.clock() 
+            end
+        end
+    end
+end
 
 local function SkyHopMove(RootPart, GoalPos, DeltaTime)
     local CurrentPos = RootPart.Position
-    
-    -- CLOSE RANGE CHECK: If close enough, just TP directly
     local Diff = GoalPos - CurrentPos
     local Dist = vector.magnitude(Diff)
     
+    -- INSTANT CHECK
     if Dist <= Config.InstantTP_Range then
         RootPart.CFrame = CFrame.new(GoalPos.x, GoalPos.y, GoalPos.z)
-        return true -- Arrived
+        return true
     end
     
-    -- VERTICAL CHECK
+    -- VERTICAL
     if CurrentPos.y < Config.SkyHeight - 10 then
         RootPart.CFrame = CFrame.new(CurrentPos.x, Config.SkyHeight, CurrentPos.z)
         RootPart.Velocity = vector.zero
         return false
     end
     
-    -- HORIZONTAL CHECK
-
+    -- HORIZONTAL
     local FlatDiff = vector.create(GoalPos.x - CurrentPos.x, 0, GoalPos.z - CurrentPos.z)
     local FlatDist = vector.magnitude(FlatDiff)
     
     if FlatDist < 15 then
-
         RootPart.CFrame = CFrame.new(GoalPos.x, GoalPos.y, GoalPos.z)
         RootPart.Velocity = vector.zero
         return false 
     end
     
-    -- Slide horizontally at Sky Height
     local Step = Config.TravelSpeed * DeltaTime
     local Direction = vector.normalize(FlatDiff)
     local MoveVec = Direction * Step
     local NewPos = CurrentPos + MoveVec
     
-    -- Maintain SkyHeight while moving
     RootPart.CFrame = CFrame.new(NewPos.x, Config.SkyHeight, NewPos.z)
     RootPart.Velocity = vector.zero
     
@@ -196,8 +208,8 @@ RunService.Render:Connect(function()
     if UI.Visible then
         local ItemCount = math.max(1, #MobList)
         local ListHeight = ItemCount * 22
-        local LavaButtonHeight = 35 
-        local TotalHeight = UI.BaseHeight + ListHeight + 20 + LavaButtonHeight
+        local ExtraH = 75 -- Height for Auto-Equip + Lava Button
+        local TotalHeight = UI.BaseHeight + ListHeight + 20 + ExtraH
         
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, TotalHeight, 0), UI.BgColor, 0.95)
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, 30, 0), UI.HeaderColor, 1)
@@ -213,16 +225,27 @@ RunService.Render:Connect(function()
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
             Config.MainEnabled = not Config.MainEnabled
             if not Config.MainEnabled then CurrentTarget = nil end
+            -- Turn off lava travel if farming is enabled
+            if Config.MainEnabled then GoingToLava = false end
+        end
+        Y_Offset = Y_Offset + 30
+
+        -- Auto Equip
+        local EqColor = Config.AutoEquip and UI.OnColor or UI.OffColor
+        local EqText = Config.AutoEquip and "Auto-Equip (Slot 2): ON" or "Auto-Equip (Slot 2): OFF"
+        DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), EqColor, 1)
+        DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 14, Color3.new(0,0,0), 1, EqText, true, nil)
+        
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
+            Config.AutoEquip = not Config.AutoEquip
         end
         Y_Offset = Y_Offset + 30
 
         -- Speed
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, UI.TextColor, 1, "Speed: " .. math.floor(Config.TravelSpeed), false, nil)
-        
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 150, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 170, Y_Offset, 0), 14, UI.TextColor, 1, "-", true, nil)
         if Clicked and IsMouseInRect(MousePos, UI.X + 150, Y_Offset, 40, 18) then Config.TravelSpeed = math.max(10, Config.TravelSpeed - 5) end
-        
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 200, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 220, Y_Offset, 0), 14, UI.TextColor, 1, "+", true, nil)
         if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then Config.TravelSpeed = Config.TravelSpeed + 5 end
@@ -230,11 +253,9 @@ RunService.Render:Connect(function()
 
         -- Range
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, UI.TextColor, 1, "TP Range: " .. math.floor(Config.InstantTP_Range), false, nil)
-        
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 150, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 170, Y_Offset, 0), 14, UI.TextColor, 1, "-", true, nil)
         if Clicked and IsMouseInRect(MousePos, UI.X + 150, Y_Offset, 40, 18) then Config.InstantTP_Range = math.max(0, Config.InstantTP_Range - 5) end
-        
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 200, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 220, Y_Offset, 0), 14, UI.TextColor, 1, "+", true, nil)
         if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then Config.InstantTP_Range = Config.InstantTP_Range + 5 end
@@ -243,7 +264,6 @@ RunService.Render:Connect(function()
         -- Refresh
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 20, 0), Color3.fromRGB(80, 80, 150), 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 3, 0), 14, UI.TextColor, 1, "Refresh Mob List", true, nil)
-        
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 20) then RefreshMobList() end
         Y_Offset = Y_Offset + 25
 
@@ -271,27 +291,43 @@ RunService.Render:Connect(function()
             end
         end
 
-        -- Lava TP
+
         Y_Offset = Y_Offset + 5
-        DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), UI.LavaColor, 1)
-        DrawingImmediate.OutlinedText(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, UI.TextColor, 1, "Teleport to Lava (use cannon if get tpback)", true, nil)
+        local LColor = GoingToLava and UI.OnColor or UI.LavaColor
+        local LText = GoingToLava and "Traveling to Lava..." or "Teleport to Lava"
+        
+        DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), LColor, 1)
+        DrawingImmediate.OutlinedText(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, UI.TextColor, 1, LText, true, nil)
         
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
-            local Character = LocalPlayer.Character
-            if Character and Character:FindFirstChild("HumanoidRootPart") then
-                local Root = Character.HumanoidRootPart
-                Root.CFrame = CFrame.new(387, 65, 72)
-                Root.Velocity = vector.zero
+            GoingToLava = not GoingToLava
+            if GoingToLava then
+                -- Disable main farm so we don't fight control
+                Config.MainEnabled = false
+                CurrentTarget = nil
             end
         end
     end
 
-    -- Logic
-    if Config.MainEnabled then
-        local Character = LocalPlayer.Character
-        if Character and Character:FindFirstChild("HumanoidRootPart") then
-            local MyRoot = Character.HumanoidRootPart
+    -- LOGIC: Auto Equip
+    local Char = LocalPlayer.Character
+    if Char then CheckAutoEquip(Char) end
+
+    -- LOGIC: Movement
+    if Char and Char:FindFirstChild("HumanoidRootPart") then
+        local MyRoot = Char.HumanoidRootPart
+        
+        if GoingToLava then
+            -- Lava Cords: 387, 65, 72
+            local LavaPos = vector.create(387, 65, 72)
+            local Arrived = SkyHopMove(MyRoot, LavaPos, DeltaTime)
             
+            if Arrived then
+                GoingToLava = false -- Stop when we get there
+            end
+            
+        -- B. FARMING MODE
+        elseif Config.MainEnabled then
             if CurrentTarget and IsAlive(CurrentTarget) then
                 local MobRoot = CurrentTarget.HumanoidRootPart
                 local MobPos = MobRoot.Position
@@ -300,7 +336,6 @@ RunService.Render:Connect(function()
                 local Dist = vector.magnitude(Diff)
                 
                 if Dist > Config.AttackDistance then
-
                     SkyHopMove(MyRoot, GoalPos, DeltaTime)
                 else
                     local LookAt = Vector3.new(MobPos.x, MobPos.y, MobPos.z)
