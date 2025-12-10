@@ -2,6 +2,7 @@
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local Camera = Workspace.CurrentCamera
 
 -- ============================================================================
 -- 1. CONFIGURATION & STATE
@@ -12,6 +13,7 @@ local EnabledMobs = {}
 
 local Config = {
     TargetFolder = "Living",
+    RocksFolder = Workspace:WaitForChild("Rocks"), -- Added for Ore ESP
     UnderOffset = 8,
     AttackDistance = 8,
     
@@ -20,9 +22,14 @@ local Config = {
     
     -- Variables controlled by GUI
     MainEnabled = false,       
+    OreEspEnabled = false,     -- New Toggle
     TravelSpeed = 300,     
     InstantTP_Range = 70,
-    AutoEquip = false 
+    AutoEquip = false,
+    
+    -- ESP Settings
+    EspColor = Color3.fromRGB(100, 255, 100),
+    EspSize = 16
 }
 
 local UI = {
@@ -41,14 +48,18 @@ local UI = {
     OnColor = Color3.fromRGB(0, 255, 100),
     OffColor = Color3.fromRGB(255, 50, 50),
     BtnColor = Color3.fromRGB(60, 60, 60),
-    LavaColor = Color3.fromRGB(255, 100, 0)
+    LavaColor = Color3.fromRGB(255, 100, 0),
+    EspColor = Color3.fromRGB(100, 200, 255) -- Blue for ESP Button
 }
 
 local LocalPlayer = Players.LocalPlayer
 local CurrentTarget = nil
 local MouseState = { WasPressed = false }
 local EquipDebounce = 0
-local GoingToLava = false -- State for Lava Travel
+local GoingToLava = false 
+
+-- Ore ESP State
+local ActiveOres = {}
 
 -- ============================================================================
 -- 2. HELPER FUNCTIONS
@@ -131,6 +142,26 @@ local function CheckAutoEquip(Character)
     end
 end
 
+-- ESP Helper: Get Position
+local function GetOrePosition(Obj)
+    if not Obj then return nil end
+
+    if Obj.ClassName == "Model" then
+        if Obj.PrimaryPart then
+            return Obj.PrimaryPart.Position
+        else
+            for _, Child in ipairs(Obj:GetChildren()) do
+                if string.find(Child.ClassName, "Part") then
+                    return Child.Position
+                end
+            end
+        end
+    elseif string.find(Obj.ClassName, "Part") then
+        return Obj.Position
+    end
+    return nil
+end
+
 local function SkyHopMove(RootPart, GoalPos, DeltaTime)
     local CurrentPos = RootPart.Position
     local Diff = GoalPos - CurrentPos
@@ -171,7 +202,33 @@ local function SkyHopMove(RootPart, GoalPos, DeltaTime)
 end
 
 -- ============================================================================
--- 3. MAIN LOOP
+-- 3. BACKGROUND TASKS (Scanner)
+-- ============================================================================
+
+-- Ore Scanner Loop
+task.spawn(function()
+    while true do
+        if Config.OreEspEnabled then
+            local Found = {}
+            local Success, Descendants = pcall(function() return Config.RocksFolder:GetDescendants() end)
+            
+            if Success and Descendants then
+                for _, Obj in ipairs(Descendants) do
+                    if Obj.Name == "Ore" then
+                        table.insert(Found, Obj)
+                    end
+                end
+                ActiveOres = Found 
+            end
+        else
+            ActiveOres = {} -- Clear list if disabled to save FPS
+        end
+        task.wait(1) -- Scan rate
+    end
+end)
+
+-- ============================================================================
+-- 4. MAIN LOOP
 -- ============================================================================
 RunService.Render:Connect(function()
     local DeltaTime = 0.03
@@ -196,7 +253,7 @@ RunService.Render:Connect(function()
         UI.Dragging = false
     end
 
-    -- Draw GUI
+    -- Draw GUI Toggle Button
     local ToggleColor = UI.Visible and UI.OnColor or UI.OffColor
     DrawingImmediate.FilledRectangle(vector.create(UI.ToggleBtn.X, UI.ToggleBtn.Y, 0), vector.create(UI.ToggleBtn.W, UI.ToggleBtn.H, 0), ToggleColor, 1)
     DrawingImmediate.Text(vector.create(UI.ToggleBtn.X + 10, UI.ToggleBtn.Y + 10, 0), 20, Color3.new(0,0,0), 1, UI.Visible and "<<" or ">>", true, nil)
@@ -205,19 +262,20 @@ RunService.Render:Connect(function()
         UI.Visible = not UI.Visible
     end
 
+    -- Draw Main UI
     if UI.Visible then
         local ItemCount = math.max(1, #MobList)
         local ListHeight = ItemCount * 22
-        local ExtraH = 75 -- Height for Auto-Equip + Lava Button
+        local ExtraH = 105 -- Increased height for ESP Button + Lava
         local TotalHeight = UI.BaseHeight + ListHeight + 20 + ExtraH
         
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, TotalHeight, 0), UI.BgColor, 0.95)
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, 30, 0), UI.HeaderColor, 1)
-        DrawingImmediate.OutlinedText(vector.create(UI.X + 10, UI.Y + 8, 0), 16, UI.TextColor, 1, "Mob AutoFarm", false, nil)
+        DrawingImmediate.OutlinedText(vector.create(UI.X + 10, UI.Y + 8, 0), 16, UI.TextColor, 1, "Mob & Ore Farm", false, nil)
         
         local Y_Offset = UI.Y + 35
 
-        -- Master Switch
+        -- 1. Master Switch
         local MasterColor = Config.MainEnabled and UI.OnColor or UI.OffColor
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), MasterColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, Color3.new(0,0,0), 1, Config.MainEnabled and "FARMING: ON" or "FARMING: OFF", true, nil)
@@ -225,12 +283,21 @@ RunService.Render:Connect(function()
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
             Config.MainEnabled = not Config.MainEnabled
             if not Config.MainEnabled then CurrentTarget = nil end
-            -- Turn off lava travel if farming is enabled
             if Config.MainEnabled then GoingToLava = false end
         end
         Y_Offset = Y_Offset + 30
 
-        -- Auto Equip
+        -- 2. Ore ESP Toggle (NEW)
+        local EspColorBtn = Config.OreEspEnabled and UI.OnColor or UI.EspColor
+        DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), EspColorBtn, 1)
+        DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, Color3.new(0,0,0), 1, Config.OreEspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", true, nil)
+        
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
+            Config.OreEspEnabled = not Config.OreEspEnabled
+        end
+        Y_Offset = Y_Offset + 30
+
+        -- 3. Auto Equip
         local EqColor = Config.AutoEquip and UI.OnColor or UI.OffColor
         local EqText = Config.AutoEquip and "Auto-Equip (Slot 2): ON" or "Auto-Equip (Slot 2): OFF"
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), EqColor, 1)
@@ -241,7 +308,7 @@ RunService.Render:Connect(function()
         end
         Y_Offset = Y_Offset + 30
 
-        -- Speed
+        -- 4. Speed Controls
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, UI.TextColor, 1, "Speed: " .. math.floor(Config.TravelSpeed), false, nil)
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 150, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 170, Y_Offset, 0), 14, UI.TextColor, 1, "-", true, nil)
@@ -251,7 +318,7 @@ RunService.Render:Connect(function()
         if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then Config.TravelSpeed = Config.TravelSpeed + 5 end
         Y_Offset = Y_Offset + 22
 
-        -- Range
+        -- 5. Range Controls
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, UI.TextColor, 1, "TP Range: " .. math.floor(Config.InstantTP_Range), false, nil)
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 150, Y_Offset, 0), vector.create(40, 18, 0), UI.BtnColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 170, Y_Offset, 0), 14, UI.TextColor, 1, "-", true, nil)
@@ -261,13 +328,13 @@ RunService.Render:Connect(function()
         if Clicked and IsMouseInRect(MousePos, UI.X + 200, Y_Offset, 40, 18) then Config.InstantTP_Range = Config.InstantTP_Range + 5 end
         Y_Offset = Y_Offset + 25
 
-        -- Refresh
+        -- 6. Refresh List
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 20, 0), Color3.fromRGB(80, 80, 150), 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 3, 0), 14, UI.TextColor, 1, "Refresh Mob List", true, nil)
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 20) then RefreshMobList() end
         Y_Offset = Y_Offset + 25
 
-        -- List
+        -- 7. Mob List
         DrawingImmediate.OutlinedText(vector.create(UI.X + 10, Y_Offset, 0), 14, Color3.fromRGB(150,150,150), 1, "Click Name to Enable:", false, nil)
         Y_Offset = Y_Offset + 22
 
@@ -291,8 +358,9 @@ RunService.Render:Connect(function()
             end
         end
 
-
         Y_Offset = Y_Offset + 5
+        
+        -- 8. Lava Teleport
         local LColor = GoingToLava and UI.OnColor or UI.LavaColor
         local LText = GoingToLava and "Traveling to Lava..." or "Teleport to Lava"
         
@@ -302,9 +370,34 @@ RunService.Render:Connect(function()
         if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
             GoingToLava = not GoingToLava
             if GoingToLava then
-                -- Disable main farm so we don't fight control
                 Config.MainEnabled = false
                 CurrentTarget = nil
+            end
+        end
+    end
+
+    -- DRAW LOGIC: ORE ESP
+    if Config.OreEspEnabled then
+        for _, OreObj in ipairs(ActiveOres) do
+            if OreObj and OreObj.Parent then
+                local OreName = OreObj:GetAttribute("Ore")
+                if OreName then
+                    local Pos = GetOrePosition(OreObj)
+                    if Pos then
+                        local ScreenPos, Visible = Camera:WorldToScreenPoint(Pos)
+                        if Visible then
+                            DrawingImmediate.OutlinedText(
+                                vector.create(ScreenPos.X, ScreenPos.Y, 0),
+                                Config.EspSize,
+                                Config.EspColor,
+                                1,
+                                "[" .. tostring(OreName) .. "]",
+                                true, 
+                                nil
+                            )
+                        end
+                    end
+                end
             end
         end
     end
@@ -318,15 +411,10 @@ RunService.Render:Connect(function()
         local MyRoot = Char.HumanoidRootPart
         
         if GoingToLava then
-            -- Lava Cords: 387, 65, 72
             local LavaPos = vector.create(387, 65, 72)
             local Arrived = SkyHopMove(MyRoot, LavaPos, DeltaTime)
+            if Arrived then GoingToLava = false end
             
-            if Arrived then
-                GoingToLava = false -- Stop when we get there
-            end
-            
-        -- B. FARMING MODE
         elseif Config.MainEnabled then
             if CurrentTarget and IsAlive(CurrentTarget) then
                 local MobRoot = CurrentTarget.HumanoidRootPart
