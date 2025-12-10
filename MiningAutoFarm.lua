@@ -37,13 +37,14 @@ local OreDatabase = {
 }
 
 local Config = {
-    DebugMode = false, -- Turn off debug to save performance
+    DebugMode = false, 
     FolderName = "Rocks",   
     ToolName = "Pickaxe",       
     
     -- MINING
     MineDistance = 10,       
     UnderOffset = 8,         
+    ClickDelay = 0.25, -- [NEW] Seconds between clicks (Lower = Faster, Higher = Slower)
     
     -- FILTER
     FilterEnabled = false,   
@@ -87,15 +88,14 @@ local LocalPlayer = Players.LocalPlayer
 local CurrentTarget = nil
 local MouseState = { WasPressed = false }
 local EquipDebounce = 0
+local LastMineClick = 0 -- For click delay
 
 -- ============================================================================
 -- 2. SAFETY HELPERS (LAG FIX SECTION)
 -- ============================================================================
 
--- Strict check to ensure object exists before touching it
 local function IsValid(Obj)
     if not Obj then return false end
-    -- Wrap in pcall to prevent "attempt to get nil" errors
     local success, parent = pcall(function() return Obj.Parent end)
     return success and parent ~= nil
 end
@@ -212,7 +212,6 @@ local function FindNearestRock()
     local MinDist = 999999
 
     for _, Rock in ipairs(ActiveRocks) do
-        -- Use SafeGetName to prevent errors if rock despawns mid-loop
         local RName = SafeGetName(Rock)
         if RName and EnabledRocks[RName] == true then
             local HP = GetRockHealth(Rock)
@@ -290,7 +289,7 @@ end
 -- 4. SCANNERS (MINING & ESP)
 -- ============================================================================
 
--- Mining Scanner (Finds Rocks)
+-- Mining Scanner
 local function PerformScan()
     local Folder = Workspace:FindFirstChild(Config.FolderName)
     if not Folder then return end 
@@ -302,7 +301,6 @@ local function PerformScan()
             if Obj.ClassName == "Model" then
                 if GetRockHealth(Obj) > 0 then
                     table.insert(FoundInstances, Obj)
-                    -- Safe Name Check
                     local N = SafeGetName(Obj)
                     if N and not RockNamesSet[N] then
                         RockNamesSet[N] = true
@@ -317,12 +315,11 @@ local function PerformScan()
     end
 end
 
--- Ore Scanner (For ESP)
+-- Ore Scanner
 task.spawn(function()
     while true do
-        PerformScan() -- Rock Scan
+        PerformScan() 
         
-        -- ESP Scan Logic
         if Config.EspEnabled then
             local FoundOres = {}
             local Folder = Workspace:FindFirstChild(Config.FolderName)
@@ -355,9 +352,7 @@ local function DrawButton(UI_Obj, RelX, RelY, Width, Height, Text, Color, IsTogg
 end
 
 local function UpdateLoop()
-    -- Garbage Collect every frame to prevent lagging on dead objects
     GarbageCollect() 
-    
     local DeltaTime = 0.03
     local MousePos = getmouseposition()
     local Clicked = CheckClick()
@@ -401,7 +396,10 @@ local function UpdateLoop()
         end
 
         MainBtn(Config.MainEnabled and "FARMING: ON" or "FARMING: OFF", Config.MainEnabled and Colors.On or Colors.Off, function() Config.MainEnabled = not Config.MainEnabled; CurrentTarget = nil end)
-        MainBtn(Config.EspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", Config.EspEnabled and Colors.On or Colors.EspTextColor, function() Config.EspEnabled = not Config.EspEnabled end)
+        
+        -- FIX: Color logic for ESP Button
+        MainBtn(Config.EspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", Config.EspEnabled and Colors.On or Colors.Off, function() Config.EspEnabled = not Config.EspEnabled end)
+        
         MainBtn(Config.AutoEquip and "Auto Equip: ON" or "Auto Equip: OFF", Config.AutoEquip and Colors.On or Colors.Off, function() Config.AutoEquip = not Config.AutoEquip end)
         MainBtn(FilterUI.Visible and "Close Filter Menu" or "Open Filter Menu", Colors.Gold, function() FilterUI.Visible = not FilterUI.Visible end)
 
@@ -466,7 +464,7 @@ local function UpdateLoop()
     end
 
     -- ===========================
-    -- ORE ESP LOGIC (From Script 1)
+    -- ORE ESP LOGIC
     -- ===========================
     if Config.EspEnabled then
         for _, OreObj in ipairs(ActiveOres) do
@@ -523,7 +521,6 @@ local function UpdateLoop()
                     local UnrevealedOreCount = 0
                     local HasValuableOre = false
                     
-                    -- Iterate through ALL children to find multiple "Ore" models
                     local success, Children = pcall(function() return CurrentTarget:GetChildren() end)
                     
                     if success and Children then
@@ -542,7 +539,6 @@ local function UpdateLoop()
                         end
                     end
                     
-                    -- ALSO Check the Main Rock attribute (Just in case)
                     local MainOreAttr = GetOreType(CurrentTarget)
                     if MainOreAttr and MainOreAttr ~= "" and MainOreAttr ~= "None" then
                         table.insert(FoundOres, tostring(MainOreAttr))
@@ -570,7 +566,12 @@ local function UpdateLoop()
                         local Pos = Vector3.new(GoalPos.x, GoalPos.y, GoalPos.z)
                         MyRoot.CFrame = CFrame.lookAt(Pos, LookAt)
                         MyRoot.Velocity = vector.zero
-                        if mouse1click then mouse1click() end
+                        
+                        -- CLICK LOGIC WITH DELAY
+                        if os.clock() - LastMineClick > Config.ClickDelay then
+                            if mouse1click then mouse1click() end
+                            LastMineClick = os.clock()
+                        end
                     else
                         CurrentTarget = nil
                     end
