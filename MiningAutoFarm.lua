@@ -43,7 +43,7 @@ local Config = {
     
     -- MINING
     MineDistance = 10,       
-    UnderOffset = 8,         
+    UnderOffset = 7,         
     ClickDelay = 0.25, -- Seconds between clicks
     
     -- FILTER
