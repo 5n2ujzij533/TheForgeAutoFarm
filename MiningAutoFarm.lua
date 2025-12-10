@@ -44,7 +44,7 @@ local Config = {
     -- MINING
     MineDistance = 10,       
     UnderOffset = 8,         
-    ClickDelay = 0.25, -- [NEW] Seconds between clicks (Lower = Faster, Higher = Slower)
+    ClickDelay = 0.25, -- Seconds between clicks
     
     -- FILTER
     FilterEnabled = false,   
@@ -67,7 +67,8 @@ local Config = {
 local MainUI = {
     X = 100, Y = 100, Width = 250, BaseHeight = 160, Visible = true,
     Dragging = false, DragOffset = {x = 0, y = 0},
-    ToggleBtn = { X = 0, Y = 300, W = 40, H = 40 }
+    -- Toggle Button at Y=500
+    ToggleBtn = { X = 0, Y = 500, W = 40, H = 40 }
 }
 
 local FilterUI = {
@@ -88,7 +89,7 @@ local LocalPlayer = Players.LocalPlayer
 local CurrentTarget = nil
 local MouseState = { WasPressed = false }
 local EquipDebounce = 0
-local LastMineClick = 0 -- For click delay
+local LastMineClick = 0
 
 -- ============================================================================
 -- 2. SAFETY HELPERS (LAG FIX SECTION)
@@ -374,7 +375,11 @@ local function UpdateLoop()
         MainUI.Dragging = false; FilterUI.Dragging = false
     end
 
+    -- TOGGLE BUTTON
     DrawingImmediate.FilledRectangle(vector.create(MainUI.ToggleBtn.X, MainUI.ToggleBtn.Y, 0), vector.create(MainUI.ToggleBtn.W, MainUI.ToggleBtn.H, 0), MainUI.Visible and Colors.On or Colors.Off, 1)
+    -- ADDED TEXT: "Ore"
+    DrawingImmediate.Text(vector.create(MainUI.ToggleBtn.X + 20, MainUI.ToggleBtn.Y + 12, 0), 14, Color3.new(0,0,0), 1, "Ore", true, nil)
+    
     if Clicked and IsMouseInRect(MousePos, MainUI.ToggleBtn.X, MainUI.ToggleBtn.Y, MainUI.ToggleBtn.W, MainUI.ToggleBtn.H) then MainUI.Visible = not MainUI.Visible end
 
     -- ===========================
@@ -397,7 +402,6 @@ local function UpdateLoop()
 
         MainBtn(Config.MainEnabled and "FARMING: ON" or "FARMING: OFF", Config.MainEnabled and Colors.On or Colors.Off, function() Config.MainEnabled = not Config.MainEnabled; CurrentTarget = nil end)
         
-        -- FIX: Color logic for ESP Button
         MainBtn(Config.EspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", Config.EspEnabled and Colors.On or Colors.Off, function() Config.EspEnabled = not Config.EspEnabled end)
         
         MainBtn(Config.AutoEquip and "Auto Equip: ON" or "Auto Equip: OFF", Config.AutoEquip and Colors.On or Colors.Off, function() Config.AutoEquip = not Config.AutoEquip end)
