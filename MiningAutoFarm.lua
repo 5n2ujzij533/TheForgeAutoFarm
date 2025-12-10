@@ -14,7 +14,7 @@ pcall(function() UserInputService = game:GetService("UserInputService") end)
 -- ============================================================================
 
 local ActiveRocks = {} -- For Mining Logic
-local ActiveOres = {}  -- For ESP Logic (From Script 1)
+local ActiveOres = {}  -- For ESP Logic
 local EnabledRocks = {} 
 local RockNamesSet = {} 
 local RockList = {}     
@@ -37,7 +37,7 @@ local OreDatabase = {
 }
 
 local Config = {
-    DebugMode = true,
+    DebugMode = false, -- Turn off debug to save performance
     FolderName = "Rocks",   
     ToolName = "Pickaxe",       
     
@@ -87,18 +87,30 @@ local LocalPlayer = Players.LocalPlayer
 local CurrentTarget = nil
 local MouseState = { WasPressed = false }
 local EquipDebounce = 0
-local LastDebugPrint = 0
 
 -- ============================================================================
--- 2. SAFETY HELPERS
+-- 2. SAFETY HELPERS (LAG FIX SECTION)
 -- ============================================================================
 
-local function IsValid(Obj) return Obj and Obj.Parent end
+-- Strict check to ensure object exists before touching it
+local function IsValid(Obj)
+    if not Obj then return false end
+    -- Wrap in pcall to prevent "attempt to get nil" errors
+    local success, parent = pcall(function() return Obj.Parent end)
+    return success and parent ~= nil
+end
 
 local function SafeGetAttribute(Obj, Attr)
     if not IsValid(Obj) then return nil end
     local s, r = pcall(function() return Obj:GetAttribute(Attr) end)
-    if s then return r end return nil
+    if s then return r end 
+    return nil
+end
+
+local function SafeGetName(Obj)
+    if not IsValid(Obj) then return nil end
+    local s, n = pcall(function() return Obj.Name end)
+    return s and n or nil
 end
 
 local function GetRockHealth(Rock)
@@ -112,29 +124,24 @@ local function GetRockMaxHealth(Rock)
 end
 
 local function GetOreType(Rock)
-    local Ore = SafeGetAttribute(Rock, "Ore")
-    return Ore 
+    return SafeGetAttribute(Rock, "Ore")
 end
 
 local function GetPosition(Obj)
     if not IsValid(Obj) then return nil end
-    if Obj.ClassName == "Model" then
-        if Obj.PrimaryPart then return Obj.PrimaryPart.Position end
-        local kids = Obj:GetChildren()
-        for i=1, #kids do
-            local child = kids[i]
-            if string.find(child.ClassName, "Part") or child.ClassName == "MeshPart" then return child.Position end
+    local success, pos = pcall(function()
+        if Obj.ClassName == "Model" then
+            if Obj.PrimaryPart then return Obj.PrimaryPart.Position end
+            local kids = Obj:GetChildren()
+            for i=1, #kids do
+                local child = kids[i]
+                if string.find(child.ClassName, "Part") or child.ClassName == "MeshPart" then return child.Position end
+            end
+        elseif string.find(Obj.ClassName, "Part") or Obj.ClassName == "UnionOperation" then 
+            return Obj.Position 
         end
-    end
-    if string.find(Obj.ClassName, "Part") or Obj.ClassName == "UnionOperation" then return Obj.Position end
-    return nil
-end
-
-local function DebugPrint(Msg)
-    if Config.DebugMode and (os.clock() - LastDebugPrint > 0.5) then
-        print("[DEBUG]: " .. Msg)
-        LastDebugPrint = os.clock()
-    end
+    end)
+    return success and pos or nil
 end
 
 -- SMART MATCHING 
@@ -158,10 +165,15 @@ local function IsOreWanted(CurrentOre)
 end
 
 local function GarbageCollect()
+    -- Clean Rocks List
     for i = #ActiveRocks, 1, -1 do
-        local Rock = ActiveRocks[i]
-        if not IsValid(Rock) then table.remove(ActiveRocks, i) end
+        if not IsValid(ActiveRocks[i]) then table.remove(ActiveRocks, i) end
     end
+    -- Clean Ores List
+    for i = #ActiveOres, 1, -1 do
+        if not IsValid(ActiveOres[i]) then table.remove(ActiveOres, i) end
+    end
+    
     if CurrentTarget then
         if not IsValid(CurrentTarget) or GetRockHealth(CurrentTarget) <= 0 then
             CurrentTarget = nil
@@ -200,7 +212,9 @@ local function FindNearestRock()
     local MinDist = 999999
 
     for _, Rock in ipairs(ActiveRocks) do
-        if IsValid(Rock) and EnabledRocks[Rock.Name] == true then
+        -- Use SafeGetName to prevent errors if rock despawns mid-loop
+        local RName = SafeGetName(Rock)
+        if RName and EnabledRocks[RName] == true then
             local HP = GetRockHealth(Rock)
             local MaxHP = GetRockMaxHealth(Rock)
             local IsFresh = (MaxHP > 0 and HP >= MaxHP) or (MaxHP == 0 and HP > 0)
@@ -288,11 +302,13 @@ local function PerformScan()
             if Obj.ClassName == "Model" then
                 if GetRockHealth(Obj) > 0 then
                     table.insert(FoundInstances, Obj)
-                    if not RockNamesSet[Obj.Name] then
-                        RockNamesSet[Obj.Name] = true
-                        table.insert(RockList, Obj.Name)
+                    -- Safe Name Check
+                    local N = SafeGetName(Obj)
+                    if N and not RockNamesSet[N] then
+                        RockNamesSet[N] = true
+                        table.insert(RockList, N)
                         table.sort(RockList) 
-                        if EnabledRocks[Obj.Name] == nil then EnabledRocks[Obj.Name] = false end
+                        if EnabledRocks[N] == nil then EnabledRocks[N] = false end
                     end
                 end
             end
@@ -306,7 +322,7 @@ task.spawn(function()
     while true do
         PerformScan() -- Rock Scan
         
-        -- ESP Scan Logic (From Script 1)
+        -- ESP Scan Logic
         if Config.EspEnabled then
             local FoundOres = {}
             local Folder = Workspace:FindFirstChild(Config.FolderName)
@@ -339,7 +355,9 @@ local function DrawButton(UI_Obj, RelX, RelY, Width, Height, Text, Color, IsTogg
 end
 
 local function UpdateLoop()
+    -- Garbage Collect every frame to prevent lagging on dead objects
     GarbageCollect() 
+    
     local DeltaTime = 0.03
     local MousePos = getmouseposition()
     local Clicked = CheckClick()
@@ -372,7 +390,7 @@ local function UpdateLoop()
         local TotalHeight = MainUI.BaseHeight + (ItemCount * 22) + 20
         DrawingImmediate.FilledRectangle(vector.create(MainUI.X, MainUI.Y, 0), vector.create(MainUI.Width, TotalHeight, 0), Colors.Bg, 0.95)
         DrawingImmediate.FilledRectangle(vector.create(MainUI.X, MainUI.Y, 0), vector.create(MainUI.Width, 30, 0), Colors.Header, 1)
-        DrawingImmediate.OutlinedText(vector.create(MainUI.X + 10, MainUI.Y + 8, 0), 16, Colors.Text, 1, "Mining Hub", false, nil)
+        DrawingImmediate.OutlinedText(vector.create(MainUI.X + 10, MainUI.Y + 8, 0), 16, Colors.Text, 1, "Ore Farm", false, nil)
         
         local Y = 35
         local function MainBtn(Txt, Col, Act)
@@ -453,7 +471,7 @@ local function UpdateLoop()
     if Config.EspEnabled then
         for _, OreObj in ipairs(ActiveOres) do
             if IsValid(OreObj) then
-                local OreName = OreObj:GetAttribute("Ore")
+                local OreName = SafeGetAttribute(OreObj, "Ore")
                 if OreName then
                     local Pos = GetPosition(OreObj)
                     if Pos then
@@ -506,17 +524,20 @@ local function UpdateLoop()
                     local HasValuableOre = false
                     
                     -- Iterate through ALL children to find multiple "Ore" models
-                    local Children = CurrentTarget:GetChildren()
-                    for _, Child in ipairs(Children) do
-                        if Child.Name == "Ore" then
-                            local OreAttr = GetOreType(Child) -- Get Attribute
-                            if OreAttr and OreAttr ~= "" and OreAttr ~= "None" then
-                                table.insert(FoundOres, tostring(OreAttr))
-                                if IsOreWanted(OreAttr) then
-                                    HasValuableOre = true
+                    local success, Children = pcall(function() return CurrentTarget:GetChildren() end)
+                    
+                    if success and Children then
+                        for _, Child in ipairs(Children) do
+                            if Child.Name == "Ore" then
+                                local OreAttr = GetOreType(Child) -- Get Attribute
+                                if OreAttr and OreAttr ~= "" and OreAttr ~= "None" then
+                                    table.insert(FoundOres, tostring(OreAttr))
+                                    if IsOreWanted(OreAttr) then
+                                        HasValuableOre = true
+                                    end
+                                else
+                                    UnrevealedOreCount = UnrevealedOreCount + 1
                                 end
-                            else
-                                UnrevealedOreCount = UnrevealedOreCount + 1
                             end
                         end
                     end
@@ -529,12 +550,7 @@ local function UpdateLoop()
                     end
 
                     -- DECISION LOGIC
-                    -- 1. If we found at least one good ore -> KEEP MINING
-                    -- 2. If we haven't revealed all ores yet -> KEEP MINING
-                    -- 3. If everything is revealed and NOTHING is good -> SKIP
-                    
                     if not HasValuableOre and UnrevealedOreCount == 0 and #FoundOres > 0 then
-                        DebugPrint("Skipping Rock. Found: " .. table.concat(FoundOres, ", "))
                         CurrentTarget = nil 
                         return
                     end
