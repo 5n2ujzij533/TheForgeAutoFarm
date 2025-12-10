@@ -57,7 +57,7 @@ local Config = {
     MainEnabled = false,        
     EspEnabled = false,     
     TravelSpeed = 300,     
-    InstantTP_Range = 70,
+    InstantTP_Range = 60,
     AutoEquip = false,
     
     EspTextColor = Color3.fromRGB(100, 255, 100),
