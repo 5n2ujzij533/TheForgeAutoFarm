@@ -256,7 +256,8 @@ RunService.Render:Connect(function()
     -- Draw GUI Toggle Button
     local ToggleColor = UI.Visible and UI.OnColor or UI.OffColor
     DrawingImmediate.FilledRectangle(vector.create(UI.ToggleBtn.X, UI.ToggleBtn.Y, 0), vector.create(UI.ToggleBtn.W, UI.ToggleBtn.H, 0), ToggleColor, 1)
-    DrawingImmediate.Text(vector.create(MainUI.ToggleBtn.X + 20, MainUI.ToggleBtn.Y + 12, 0), 14, Color3.new(0,0,0), 1, "Ore", true, nil)
+    
+    DrawingImmediate.Text(vector.create(UI.ToggleBtn.X + 20, UI.ToggleBtn.Y + 12, 0), 14, Color3.new(0,0,0), 1, "Mob", true, nil)
     
     if Clicked and IsMouseInRect(MousePos, UI.ToggleBtn.X, UI.ToggleBtn.Y, UI.ToggleBtn.W, UI.ToggleBtn.H) then
         UI.Visible = not UI.Visible
