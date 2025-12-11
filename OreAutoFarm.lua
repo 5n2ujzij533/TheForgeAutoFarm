@@ -217,6 +217,8 @@ local function FindNearestRock()
         if RName and EnabledRocks[RName] == true then
             local HP = GetRockHealth(Rock)
             local MaxHP = GetRockMaxHealth(Rock)
+            
+            -- CHECK 1: Ensure Rock is Fresh before targeting
             local IsFresh = (MaxHP > 0 and HP >= MaxHP) or (MaxHP == 0 and HP > 0)
             
             if IsFresh then
@@ -369,8 +371,14 @@ local function UpdateLoop()
                 FilterUI.Dragging = true; FilterUI.DragOffset.x = MousePos.x - FilterUI.X; FilterUI.DragOffset.y = MousePos.y - FilterUI.Y
             end
         end
-        if MainUI.Dragging then MainUI.X = MousePos.x - MainUI.DragOffset.x; MainUI.Y = MousePos.y - MainUI.DragOffset.y end
-        if FilterUI.Dragging then FilterUI.X = MousePos.x - FilterUI.DragOffset.x; FilterUI.Y = MousePos.y - FilterUI.DragOffset.y end
+        if MainUI.Dragging then 
+            MainUI.X = MousePos.x - MainUI.DragOffset.x
+            MainUI.Y = MousePos.y - MainUI.DragOffset.y 
+        end
+        if FilterUI.Dragging then 
+            FilterUI.X = MousePos.x - FilterUI.DragOffset.x
+            FilterUI.Y = MousePos.y - FilterUI.DragOffset.y 
+        end
     else
         MainUI.Dragging = false; FilterUI.Dragging = false
     end
@@ -565,19 +573,32 @@ local function UpdateLoop()
                 if Dist > Config.MineDistance then
                     SkyHopMove(MyRoot, GoalPos, DeltaTime)
                 else
-                    if GetRockHealth(CurrentTarget) > 0 then
-                        local LookAt = Vector3.new(OrePos.x, OrePos.y, OrePos.z)
-                        local Pos = Vector3.new(GoalPos.x, GoalPos.y, GoalPos.z)
-                        MyRoot.CFrame = CFrame.lookAt(Pos, LookAt)
-                        MyRoot.Velocity = vector.zero
-                        
-                        -- CLICK LOGIC WITH DELAY
-                        if os.clock() - LastMineClick > Config.ClickDelay then
-                            if mouse1click then mouse1click() end
-                            LastMineClick = os.clock()
-                        end
-                    else
+                    -- ARRIVED AT ROCK
+                    local CurrentHP = GetRockHealth(CurrentTarget)
+                    local MaxHP_Real = GetRockMaxHealth(CurrentTarget)
+
+                    -- Check 1: Dead?
+                    if CurrentHP <= 0 then
                         CurrentTarget = nil
+                        return
+                    end
+
+                    -- Check 2: (REQUESTED) Is it still fresh?
+                    if MaxHP_Real > 0 and CurrentHP < MaxHP_Real then
+                        CurrentTarget = nil -- Abandon rock
+                        return
+                    end
+
+                    -- If passed, mine it
+                    local LookAt = Vector3.new(OrePos.x, OrePos.y, OrePos.z)
+                    local Pos = Vector3.new(GoalPos.x, GoalPos.y, GoalPos.z)
+                    MyRoot.CFrame = CFrame.lookAt(Pos, LookAt)
+                    MyRoot.Velocity = vector.zero
+                    
+                    -- CLICK LOGIC WITH DELAY
+                    if os.clock() - LastMineClick > Config.ClickDelay then
+                        if mouse1click then mouse1click() end
+                        LastMineClick = os.clock()
                     end
                 end
             else
