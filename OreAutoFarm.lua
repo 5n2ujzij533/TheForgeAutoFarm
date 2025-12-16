@@ -13,8 +13,8 @@ pcall(function() UserInputService = game:GetService("UserInputService") end)
 -- 1. DATA & CONFIGURATION
 -- ============================================================================
 
-local ActiveRocks = {} -- For Mining Logic
-local ActiveOres = {}  -- For ESP Logic
+local ActiveRocks = {} 
+local ActiveOres = {}  
 local EnabledRocks = {} 
 local RockNamesSet = {} 
 local RockList = {}     
@@ -45,6 +45,8 @@ local Config = {
     -- MINING
     MineDistance = 10,       
     UnderOffset = 7,         
+    AboveOffset = 7,
+    MiningPosition = "Under", 
     ClickDelay = 0.25, 
     
     -- FILTER
@@ -68,8 +70,7 @@ local Config = {
 }
 
 local MainUI = {
-    -- [FIXED] Reverted Width to 250, Increased BaseHeight to 260 to fit new buttons
-    X = 100, Y = 100, Width = 250, BaseHeight = 260, Visible = true,
+    X = 100, Y = 100, Width = 250, BaseHeight = 290, Visible = true,
     Dragging = false, DragOffset = {x = 0, y = 0},
     ToggleBtn = { X = 0, Y = 500, W = 40, H = 40 }
 }
@@ -100,22 +101,17 @@ local TargetLocked = false
 -- ============================================================================
 
 local function IsValid(Obj)
-    if not Obj then return false end
-    local success, parent = pcall(function() return Obj.Parent end)
-    return success and parent ~= nil
+    return Obj and Obj.Parent
 end
 
 local function SafeGetAttribute(Obj, Attr)
     if not IsValid(Obj) then return nil end
-    local s, r = pcall(function() return Obj:GetAttribute(Attr) end)
-    if s then return r end 
-    return nil
+    return Obj:GetAttribute(Attr)
 end
 
 local function SafeGetName(Obj)
     if not IsValid(Obj) then return nil end
-    local s, n = pcall(function() return Obj.Name end)
-    return s and n or nil
+    return Obj.Name
 end
 
 local function GetRockHealth(Rock)
@@ -128,34 +124,51 @@ local function GetRockMaxHealth(Rock)
     return (H and tonumber(H)) or 0 
 end
 
-local function GetOreType(Rock)
-    return SafeGetAttribute(Rock, "Ore")
-end
-
 local function GetPosition(Obj)
     if not IsValid(Obj) then return nil end
-    local success, pos = pcall(function()
-        if Obj.ClassName == "Model" then
-            if Obj.PrimaryPart then return Obj.PrimaryPart.Position end
-            local kids = Obj:GetChildren()
-            for i=1, #kids do
-                local child = kids[i]
-                if string.find(child.ClassName, "Part") or child.ClassName == "MeshPart" then return child.Position end
-            end
-        elseif string.find(Obj.ClassName, "Part") or Obj.ClassName == "UnionOperation" then 
-            return Obj.Position 
+    -- [FIX] Use ClassName check instead of IsA for stability
+    if Obj.ClassName == "Model" then
+        if Obj.PrimaryPart then return Obj.PrimaryPart.Position end
+        local kids = Obj:GetChildren()
+        for i=1, #kids do
+            local child = kids[i]
+            if child.ClassName == "Part" or child.ClassName == "MeshPart" then return child.Position end
         end
-    end)
-    return success and pos or nil
+    elseif string.find(Obj.ClassName, "Part") then 
+        return Obj.Position 
+    end
+    return nil
 end
 
 local function IsVolcanic(Rock)
     if not IsValid(Rock) then return false end
     local N = SafeGetName(Rock)
     if N == "Volcanic Rock" then return true end
-    local Attr = GetOreType(Rock)
+    local Attr = SafeGetAttribute(Rock, "Ore")
     if Attr and tostring(Attr) == "Volcanic Rock" then return true end
+    if Rock:FindFirstChild("Volcanic Rock") then return true end
     return false
+end
+
+-- ============================================================================
+-- 3. INTELLIGENT ORE DETECTION
+-- ============================================================================
+
+local function GetRevealedOreType(Rock)
+    if not IsValid(Rock) then return nil end
+    
+    -- Method 1: Attribute on Rock
+    local Attr = SafeGetAttribute(Rock, "Ore")
+    if Attr and Attr ~= "" then return tostring(Attr) end
+    
+    -- Method 2: Child Model named "Ore" with Attribute
+    local OreModel = Rock:FindFirstChild("Ore")
+    if OreModel then
+        local ChildAttr = SafeGetAttribute(OreModel, "Ore")
+        if ChildAttr and ChildAttr ~= "" then return tostring(ChildAttr) end
+    end
+    
+    return nil -- Ore is still hidden
 end
 
 local function IsOreWanted(CurrentOre)
@@ -163,6 +176,7 @@ local function IsOreWanted(CurrentOre)
     CurrentOre = tostring(CurrentOre)
     
     if Config.FilterWhitelist[CurrentOre] then return true end
+    
     local NoSpace = string.gsub(CurrentOre, " ", "")
     if Config.FilterWhitelist[NoSpace] then return true end
     
@@ -191,7 +205,7 @@ local function GarbageCollect()
 end
 
 -- ============================================================================
--- 3. INTERACTION & MOVEMENT
+-- 4. INTERACTION & MOVEMENT
 -- ============================================================================
 
 local function IsMouseInRect(MousePos, RectX, RectY, RectW, RectH)
@@ -251,25 +265,42 @@ local function FindNearestRock()
     local Closest = nil
     local MinDist = 999999
 
+    -- 1. PRIORITY VOLCANIC (Global or Local Scope)
     if Config.PriorityVolcanic then
         local Volcanic = FindVolcanicRock()
         if Volcanic then return Volcanic end
     end
 
+    -- 2. STANDARD SEARCH
     for _, Rock in ipairs(ActiveRocks) do
         local RName = SafeGetName(Rock)
         if RName and EnabledRocks[RName] == true then
-            local HP = GetRockHealth(Rock)
-            local MaxHP = GetRockMaxHealth(Rock)
-            local IsFresh = (MaxHP > 0 and HP >= MaxHP) or (MaxHP == 0 and HP > 0)
             
-            if IsFresh then
-                local Pos = GetPosition(Rock)
-                if Pos then
-                    local Dist = vector.magnitude(Pos - MyPos)
-                    if Dist < MinDist then
-                        MinDist = Dist
-                        Closest = Rock
+            -- [CRITICAL LOGIC] "Mine then Check"
+            -- 1. Check if Ore is ALREADY revealed
+            local RevealedOre = GetRevealedOreType(Rock)
+            
+            local IsValidCandidate = true
+            if Config.FilterEnabled and RevealedOre then
+                -- Ore is visible. Is it trash?
+                if not IsOreWanted(RevealedOre) then
+                    IsValidCandidate = false -- Skip this rock, we already know it's bad
+                end
+            end
+            
+            if IsValidCandidate then
+                local HP = GetRockHealth(Rock)
+                local MaxHP = GetRockMaxHealth(Rock)
+                local IsFresh = (MaxHP > 0 and HP >= MaxHP) or (MaxHP == 0 and HP > 0)
+                
+                if IsFresh then
+                    local Pos = GetPosition(Rock)
+                    if Pos then
+                        local Dist = vector.magnitude(Pos - MyPos)
+                        if Dist < MinDist then
+                            MinDist = Dist
+                            Closest = Rock
+                        end
                     end
                 end
             end
@@ -331,37 +362,48 @@ local function SkyHopMove(RootPart, GoalPos, DeltaTime)
 end
 
 -- ============================================================================
--- 4. SCANNERS (MINING & ESP)
+-- 5. SCANNERS (MINING & ESP) - [FIXED CRASH]
 -- ============================================================================
 
 local function PerformScan()
-    local SearchTarget = Workspace:FindFirstChild(Config.FolderName)
+    -- 1. Validate Main Folder
+    local MainFolder = Workspace:FindFirstChild(Config.FolderName)
+    if not MainFolder then return end 
     
-    if Config.OnlyLava and SearchTarget then
-        SearchTarget = SearchTarget:FindFirstChild(Config.LavaFolder)
+    -- 2. Determine Target Folder
+    local ScanTarget = MainFolder
+    if Config.OnlyLava then
+        local Lava = MainFolder:FindFirstChild(Config.LavaFolder)
+        if Lava then 
+            ScanTarget = Lava 
+        else
+            ActiveRocks = {}
+            return
+        end
     end
     
-    if not SearchTarget then return end 
+    -- 3. Scan
     local FoundInstances = {}
-    local Success, AllObjects = pcall(function() return SearchTarget:GetDescendants() end)
+    local Descendants = ScanTarget:GetDescendants()
     
-    if Success and AllObjects then
-        for _, Obj in ipairs(AllObjects) do
-            if Obj.ClassName == "Model" then
-                if GetRockHealth(Obj) > 0 then
-                    table.insert(FoundInstances, Obj)
-                    local N = SafeGetName(Obj)
-                    if N and not RockNamesSet[N] then
-                        RockNamesSet[N] = true
-                        table.insert(RockList, N)
-                        table.sort(RockList) 
-                        if EnabledRocks[N] == nil then EnabledRocks[N] = false end
-                    end
+    for _, Obj in ipairs(Descendants) do
+        -- [FIX] Replaced IsA("Model") with ClassName check to prevent error
+        if Obj.ClassName == "Model" then
+            local H = Obj:GetAttribute("Health")
+            if H and tonumber(H) > 0 then
+                table.insert(FoundInstances, Obj)
+                
+                local N = Obj.Name
+                if not RockNamesSet[N] then
+                    RockNamesSet[N] = true
+                    table.insert(RockList, N)
+                    table.sort(RockList) 
+                    if EnabledRocks[N] == nil then EnabledRocks[N] = false end
                 end
             end
         end
-        ActiveRocks = FoundInstances
     end
+    ActiveRocks = FoundInstances
 end
 
 task.spawn(function()
@@ -370,21 +412,19 @@ task.spawn(function()
         
         if Config.EspEnabled then
             local FoundOres = {}
-            local SearchTarget = Workspace:FindFirstChild(Config.FolderName)
-            if Config.OnlyLava and SearchTarget then
-                SearchTarget = SearchTarget:FindFirstChild(Config.LavaFolder)
+            local Target = Workspace:FindFirstChild(Config.FolderName)
+            if Config.OnlyLava and Target then
+                Target = Target:FindFirstChild(Config.LavaFolder)
             end
 
-            if SearchTarget then
-                local Success, Descendants = pcall(function() return SearchTarget:GetDescendants() end)
-                if Success and Descendants then
-                    for _, Obj in ipairs(Descendants) do
-                        if Obj.Name == "Ore" then
-                            table.insert(FoundOres, Obj)
-                        end
+            if Target then
+                local Descendants = Target:GetDescendants()
+                for _, Obj in ipairs(Descendants) do
+                    if Obj.Name == "Ore" then
+                        table.insert(FoundOres, Obj)
                     end
-                    ActiveOres = FoundOres
                 end
+                ActiveOres = FoundOres
             end
         else
             ActiveOres = {}
@@ -395,7 +435,7 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- 5. RENDER LOOP (DUAL WINDOW UI)
+-- 6. RENDER LOOP (DUAL WINDOW UI)
 -- ============================================================================
 
 local function DrawButton(UI_Obj, RelX, RelY, Width, Height, Text, Color, IsToggle)
@@ -472,6 +512,17 @@ local function UpdateLoop()
             Config.PriorityVolcanic = not Config.PriorityVolcanic
             CurrentTarget = nil 
             TargetLocked = false
+        end)
+
+        -- Mining Position Toggle
+        local PosTxt = "MINE POS: " .. (Config.MiningPosition == "Under" and "UNDER" or "ABOVE")
+        MainBtn(PosTxt, Colors.Btn, function()
+            if Config.MiningPosition == "Under" then
+                Config.MiningPosition = "Above"
+            else
+                Config.MiningPosition = "Under"
+            end
+            CurrentTarget = nil 
         end)
 
         MainBtn(Config.EspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", Config.EspEnabled and Colors.On or Colors.Off, function() Config.EspEnabled = not Config.EspEnabled end)
@@ -599,6 +650,9 @@ local function UpdateLoop()
                     return 
                 end
                 
+                local Y_Offset = (Config.MiningPosition == "Under") and -Config.UnderOffset or Config.AboveOffset
+                local GoalPos = vector.create(OrePos.x, OrePos.y + Y_Offset, OrePos.z)
+                
                 local DistToRock = vector.magnitude(MyRoot.Position - OrePos)
                 if DistToRock > 15 and MaxHP > 0 and HP < MaxHP and not TargetLocked then
                       CurrentTarget = nil 
@@ -615,47 +669,17 @@ local function UpdateLoop()
                     end
                 end
 
-                -- ====== MULTI-ORE FILTER LOGIC ======
-                if Config.FilterEnabled then
-                    local FoundOres = {} -- Stores names of revealed ores
-                    local UnrevealedOreCount = 0
-                    local HasValuableOre = false
-                    
-                    local success, Children = pcall(function() return CurrentTarget:GetChildren() end)
-                    
-                    if success and Children then
-                        for _, Child in ipairs(Children) do
-                            if Child.Name == "Ore" then
-                                local OreAttr = GetOreType(Child) 
-                                if OreAttr and OreAttr ~= "" and OreAttr ~= "None" then
-                                    table.insert(FoundOres, tostring(OreAttr))
-                                    if IsOreWanted(OreAttr) then
-                                        HasValuableOre = true
-                                    end
-                                else
-                                    UnrevealedOreCount = UnrevealedOreCount + 1
-                                end
-                            end
-                        end
-                    end
-                    
-                    local MainOreAttr = GetOreType(CurrentTarget)
-                    if MainOreAttr and MainOreAttr ~= "" and MainOreAttr ~= "None" then
-                        table.insert(FoundOres, tostring(MainOreAttr))
-                        if IsOreWanted(MainOreAttr) then HasValuableOre = true end
-                    end
-
-                    -- DECISION LOGIC
-                    if not HasValuableOre and UnrevealedOreCount == 0 and #FoundOres > 0 then
-                        CurrentTarget = nil 
+                -- [CRITICAL] REAL-TIME FILTER CHECK
+                local RevealedOre = GetRevealedOreType(CurrentTarget)
+                if Config.FilterEnabled and RevealedOre then
+                    if not IsOreWanted(RevealedOre) then
+                        CurrentTarget = nil
                         TargetLocked = false
                         return
                     end
                 end
-                -- ==================================
 
                 -- MOVE & MINE
-                local GoalPos = vector.create(OrePos.x, OrePos.y - Config.UnderOffset, OrePos.z)
                 local Diff = MyRoot.Position - GoalPos
                 local Dist = vector.magnitude(Diff)
                 
@@ -675,7 +699,7 @@ local function UpdateLoop()
                     -- [FIX] Check freshness ONCE (if not locked yet)
                     if not TargetLocked then
                         if MaxHP_Real > 0 and CurrentHP < MaxHP_Real then
-                            CurrentTarget = nil -- Abandon rock
+                            CurrentTarget = nil -- Abandon damaged rock
                             return
                         else
                             TargetLocked = true -- Commit to this rock
