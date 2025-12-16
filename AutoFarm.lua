@@ -1,7 +1,13 @@
+--!optimize 2
+-- 1. LOAD LIBRARY (CRITICAL FOR UI POSITIONS)
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Sploiter13/severefuncs/refs/heads/main/merge.lua"))();
+
 -- Services
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local MouseService = game:GetService("MouseService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Camera = Workspace.CurrentCamera
 
 -- ============================================================================
@@ -13,7 +19,7 @@ local EnabledMobs = {}
 
 local Config = {
     TargetFolder = "Living",
-    RocksFolder = Workspace:WaitForChild("Rocks"), -- Added for Ore ESP
+    RocksFolder = Workspace:WaitForChild("Rocks"), 
     UnderOffset = 8,
     AttackDistance = 8,
     
@@ -22,7 +28,12 @@ local Config = {
     
     -- Variables controlled by GUI
     MainEnabled = false,       
-    OreEspEnabled = false,     -- New Toggle
+    OreEspEnabled = false,
+    
+    -- NEW AUTO SELL CONFIG
+    AutoSell = false,
+    MerchantPos = Vector3.new(-132.07, 21.61, -20.92),
+    
     TravelSpeed = 300,     
     InstantTP_Range = 70,
     AutoEquip = false,
@@ -49,7 +60,7 @@ local UI = {
     OffColor = Color3.fromRGB(255, 50, 50),
     BtnColor = Color3.fromRGB(60, 60, 60),
     LavaColor = Color3.fromRGB(255, 100, 0),
-    EspColor = Color3.fromRGB(100, 200, 255) -- Blue for ESP Button
+    EspColor = Color3.fromRGB(100, 200, 255)
 }
 
 local LocalPlayer = Players.LocalPlayer
@@ -58,8 +69,9 @@ local MouseState = { WasPressed = false }
 local EquipDebounce = 0
 local GoingToLava = false 
 
--- Ore ESP State
+-- State Management
 local ActiveOres = {}
+local IsSelling = false
 
 -- ============================================================================
 -- 2. HELPER FUNCTIONS
@@ -145,7 +157,6 @@ end
 -- ESP Helper: Get Position
 local function GetOrePosition(Obj)
     if not Obj then return nil end
-
     if Obj.ClassName == "Model" then
         if Obj.PrimaryPart then
             return Obj.PrimaryPart.Position
@@ -167,20 +178,17 @@ local function SkyHopMove(RootPart, GoalPos, DeltaTime)
     local Diff = GoalPos - CurrentPos
     local Dist = vector.magnitude(Diff)
     
-    -- INSTANT CHECK
     if Dist <= Config.InstantTP_Range then
         RootPart.CFrame = CFrame.new(GoalPos.x, GoalPos.y, GoalPos.z)
         return true
     end
     
-    -- VERTICAL
     if CurrentPos.y < Config.SkyHeight - 10 then
         RootPart.CFrame = CFrame.new(CurrentPos.x, Config.SkyHeight, CurrentPos.z)
         RootPart.Velocity = vector.zero
         return false
     end
     
-    -- HORIZONTAL
     local FlatDiff = vector.create(GoalPos.x - CurrentPos.x, 0, GoalPos.z - CurrentPos.z)
     local FlatDist = vector.magnitude(FlatDiff)
     
@@ -202,33 +210,189 @@ local function SkyHopMove(RootPart, GoalPos, DeltaTime)
 end
 
 -- ============================================================================
--- 3. BACKGROUND TASKS (Scanner)
+-- 3. AUTO SELL HELPERS & LOGIC
 -- ============================================================================
 
--- Ore Scanner Loop
+local function GetObject(pathStr)
+    local segments = pathStr:split(".")
+    local current = game
+    for i, name in ipairs(segments) do
+        if i == 1 and name == "game" then
+        elseif current == game and name == "Players" then
+            current = Players
+        elseif current == Players and name ~= "LocalPlayer" then
+            current = current.LocalPlayer
+        else
+            local nextObj = current:FindFirstChild(name)
+            if not nextObj then return nil end
+            current = nextObj
+        end
+    end
+    return current
+end
+
+local function GetTextMemory(obj)
+    if not obj then return "" end
+    if memory and memory.readstring then
+        return memory.readstring(obj, 3648) or ""
+    else
+        return obj.Text
+    end
+end
+
+local function ClickObject(obj)
+    if not obj then return false end
+    local absPos = obj.AbsolutePosition
+    local absSize = obj.AbsoluteSize
+    if absPos and absSize then
+        local centerX = absPos.X + (absSize.X / 2)
+        local centerY = absPos.Y + (absSize.Y / 2)
+        if mouse1click and MouseService then
+            mouse1click()
+            MouseService:SetMouseLocation(centerX, centerY)
+            return true
+        end
+    end
+    return false
+end
+
+local function PressE()
+    if keypress then
+        keypress(0x45) -- 'E' key
+        task.wait(0.05)
+        keyrelease(0x45)
+    else
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    end
+end
+
+local function PerformAutoSell()
+    if IsSelling then return end -- already running
+    if not Config.AutoSell then return end
+    
+    -- 1. CHECK CAPACITY
+    local Path_Capacity = "game.Players.lugiabinh.PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
+    local capObj = GetObject(Path_Capacity)
+    
+    if not capObj then return end -- UI might be closed
+    
+    local text = GetTextMemory(capObj)
+    local current, max = text:match("(%d+)/(%d+)")
+    
+    if current and max and tonumber(current) >= tonumber(max) then
+        -- STASH FULL -> START SEQUENCE
+        IsSelling = true
+        CurrentTarget = nil 
+        
+        -- 2. TRAVEL
+        local Char = LocalPlayer.Character
+        local Root = Char and Char:FindFirstChild("HumanoidRootPart")
+        if Root then
+            local arrived = false
+            while not arrived and Config.AutoSell and Root.Parent do
+                arrived = SkyHopMove(Root, Config.MerchantPos, 0.03)
+                task.wait(0.03)
+            end
+        end
+        
+        -- 3. INTERACT
+        local Path_Billboard = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard"
+        local bb = GetObject(Path_Billboard)
+        local startInteract = os.clock()
+        
+        while (not bb or not bb.Visible) and (os.clock() - startInteract < 10) do
+            PressE()
+            task.wait(0.5)
+            bb = GetObject(Path_Billboard)
+        end
+        
+        task.wait(0.5)
+        
+        -- 4. UI SEQUENCE
+        local Path_DialogueBtn   = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard.Response.Button"
+        local Path_SellUI        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell"
+        local Path_SelectAll     = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll"
+        local Path_SelectTitle   = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll.Frame.Title"
+        local Path_Accept        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.Accept"
+        
+        -- Step 1: Open Sell UI
+        local timeout = 0
+        while timeout < 20 do
+            local sellUI = GetObject(Path_SellUI)
+            if sellUI and sellUI.Visible then break end
+            local diagBtn = GetObject(Path_DialogueBtn)
+            if diagBtn then ClickObject(diagBtn) end
+            task.wait(0.5); timeout = timeout + 1
+        end
+        
+        -- Step 2: Select All
+        timeout = 0
+        while timeout < 20 do
+            local titleObj = GetObject(Path_SelectTitle)
+            local selectBtn = GetObject(Path_SelectAll)
+            if titleObj then
+                local txt = GetTextMemory(titleObj)
+                if txt == "Unselect All" then break end
+                if selectBtn then ClickObject(selectBtn) end
+            end
+            task.wait(0.5); timeout = timeout + 1
+        end
+        
+        -- Step 3: Accept
+        timeout = 0
+        while timeout < 20 do
+            local bb2 = GetObject(Path_Billboard)
+            if bb2 and bb2.Visible then break end
+            local accBtn = GetObject(Path_Accept)
+            if accBtn then ClickObject(accBtn) end
+            task.wait(0.5); timeout = timeout + 1
+        end
+        
+        -- Step 4: Close Dialogue
+        timeout = 0
+        while timeout < 20 do
+             local bb3 = GetObject(Path_Billboard)
+             if not bb3 or not bb3.Visible then break end
+             local diagBtn = GetObject(Path_DialogueBtn)
+             if diagBtn then ClickObject(diagBtn) end
+             task.wait(0.5); timeout = timeout + 1
+        end
+        
+        IsSelling = false
+    end
+end
+
+-- ============================================================================
+-- 4. BACKGROUND TASKS (Scanner & AutoSell)
+-- ============================================================================
+
 task.spawn(function()
     while true do
+        -- Ore ESP Scanner
         if Config.OreEspEnabled then
             local Found = {}
             local Success, Descendants = pcall(function() return Config.RocksFolder:GetDescendants() end)
-            
             if Success and Descendants then
                 for _, Obj in ipairs(Descendants) do
-                    if Obj.Name == "Ore" then
-                        table.insert(Found, Obj)
-                    end
+                    if Obj.Name == "Ore" then table.insert(Found, Obj) end
                 end
                 ActiveOres = Found 
             end
         else
-            ActiveOres = {} -- Clear list if disabled to save FPS
+            ActiveOres = {} 
         end
-        task.wait(1) -- Scan rate
+        
+        -- Auto Sell Trigger
+        task.spawn(PerformAutoSell)
+        
+        task.wait(1) 
     end
 end)
 
 -- ============================================================================
--- 4. MAIN LOOP
+-- 5. MAIN LOOP
 -- ============================================================================
 RunService.Render:Connect(function()
     local DeltaTime = 0.03
@@ -253,11 +417,9 @@ RunService.Render:Connect(function()
         UI.Dragging = false
     end
 
-    -- Draw GUI Toggle Button (UPDATED)
+    -- Draw GUI Toggle Button
     local ToggleColor = UI.Visible and UI.OnColor or UI.OffColor
     DrawingImmediate.FilledRectangle(vector.create(UI.ToggleBtn.X, UI.ToggleBtn.Y, 0), vector.create(UI.ToggleBtn.W, UI.ToggleBtn.H, 0), ToggleColor, 1)
-    
-    -- Changed Text to "Mob" with matching style
     DrawingImmediate.Text(vector.create(UI.ToggleBtn.X + 20, UI.ToggleBtn.Y + 12, 0), 14, Color3.new(0,0,0), 1, "Mob", true, nil)
     
     if Clicked and IsMouseInRect(MousePos, UI.ToggleBtn.X, UI.ToggleBtn.Y, UI.ToggleBtn.W, UI.ToggleBtn.H) then
@@ -268,7 +430,7 @@ RunService.Render:Connect(function()
     if UI.Visible then
         local ItemCount = math.max(1, #MobList)
         local ListHeight = ItemCount * 22
-        local ExtraH = 105 -- Increased height for ESP Button + Lava
+        local ExtraH = 135 -- Increased height for Auto Sell button
         local TotalHeight = UI.BaseHeight + ListHeight + 20 + ExtraH
         
         DrawingImmediate.FilledRectangle(vector.create(UI.X, UI.Y, 0), vector.create(UI.Width, TotalHeight, 0), UI.BgColor, 0.95)
@@ -289,14 +451,12 @@ RunService.Render:Connect(function()
         end
         Y_Offset = Y_Offset + 30
 
-        -- 2. Ore ESP Toggle (NEW)
+        -- 2. Ore ESP Toggle
         local EspColorBtn = Config.OreEspEnabled and UI.OnColor or UI.EspColor
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), EspColorBtn, 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, Color3.new(0,0,0), 1, Config.OreEspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", true, nil)
         
-        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
-            Config.OreEspEnabled = not Config.OreEspEnabled
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then Config.OreEspEnabled = not Config.OreEspEnabled end
         Y_Offset = Y_Offset + 30
 
         -- 3. Auto Equip
@@ -305,9 +465,7 @@ RunService.Render:Connect(function()
         DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), EqColor, 1)
         DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 14, Color3.new(0,0,0), 1, EqText, true, nil)
         
-        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
-            Config.AutoEquip = not Config.AutoEquip
-        end
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then Config.AutoEquip = not Config.AutoEquip end
         Y_Offset = Y_Offset + 30
 
         -- 4. Speed Controls
@@ -362,7 +520,18 @@ RunService.Render:Connect(function()
 
         Y_Offset = Y_Offset + 5
         
-        -- 8. Lava Teleport
+        -- 8. Auto Sell Button (NEW)
+        local SellColor = Config.AutoSell and UI.OnColor or UI.OffColor
+        local SellText = Config.AutoSell and "AUTO SELL: ON" or "AUTO SELL: OFF"
+        DrawingImmediate.FilledRectangle(vector.create(UI.X + 10, Y_Offset, 0), vector.create(230, 25, 0), SellColor, 1)
+        DrawingImmediate.Text(vector.create(UI.X + 125, Y_Offset + 5, 0), 16, Color3.new(0,0,0), 1, SellText, true, nil)
+        
+        if Clicked and IsMouseInRect(MousePos, UI.X + 10, Y_Offset, 230, 25) then
+            Config.AutoSell = not Config.AutoSell
+        end
+        Y_Offset = Y_Offset + 30
+
+        -- 9. Lava Teleport
         local LColor = GoingToLava and UI.OnColor or UI.LavaColor
         local LText = GoingToLava and "Traveling to Lava..." or "Teleport to Lava"
         
@@ -403,6 +572,9 @@ RunService.Render:Connect(function()
             end
         end
     end
+    
+    -- IF SELLING, SKIP FARMING LOGIC
+    if IsSelling then return end
 
     -- LOGIC: Auto Equip
     local Char = LocalPlayer.Character
