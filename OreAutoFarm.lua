@@ -1,9 +1,13 @@
--- Services
+--!optimize 2
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Sploiter13/severefuncs/refs/heads/main/merge.lua"))();
+
+-- // SERVICES //
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local Camera = Workspace.CurrentCamera
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local MouseService = game:GetService("MouseService")
 
 -- Safe Service Get
 local UserInputService = nil
@@ -17,7 +21,7 @@ local ActiveRocks = {}
 local ActiveOres = {}  
 local EnabledRocks = {} 
 local RockNamesSet = {} 
-local RockList = {}     
+local RockList = {}      
 
 local OreDatabase = {
     ["Stonewake"] = {
@@ -40,17 +44,18 @@ local Config = {
     DebugMode = false, 
     FolderName = "Rocks",   
     LavaFolder = "Island2VolcanicDepths",
-    ToolName = "Pickaxe",       
+    ToolName = "Pickaxe",        
     
     -- MINING
-    MineDistance = 10,       
-    UnderOffset = 7,         
+    MineDistance = 10,        
+    UnderOffset = 7,          
     AboveOffset = 7,
     MiningPosition = "Under", 
     ClickDelay = 0.25, 
     
     -- FILTER
-    FilterEnabled = false,   
+    FilterEnabled = false,    
+    FilterVolcanicOnly = false, -- [NEW]
     FilterWhitelist = {}, 
     
     -- SYSTEM
@@ -58,25 +63,29 @@ local Config = {
     SkyHeight = 500,        
     
     MainEnabled = false,        
-    EspEnabled = false,     
+    EspEnabled = false,      
     OnlyLava = false,
     PriorityVolcanic = false,
-    TravelSpeed = 300,     
+    TravelSpeed = 300,      
     InstantTP_Range = 60,
     AutoEquip = false,
+    
+    -- AUTO SELL
+    AutoSell = false,
+    MerchantPos = Vector3.new(-132.07, 21.61, -20.92),
     
     EspTextColor = Color3.fromRGB(100, 255, 100),
     EspTextSize = 16,
 }
 
 local MainUI = {
-    X = 100, Y = 100, Width = 250, BaseHeight = 290, Visible = true,
+    X = 100, Y = 100, Width = 250, BaseHeight = 320, Visible = true,
     Dragging = false, DragOffset = {x = 0, y = 0},
     ToggleBtn = { X = 0, Y = 500, W = 40, H = 40 }
 }
 
 local FilterUI = {
-    X = 400, Y = 100, Width = 250, BaseHeight = 200, Visible = false, 
+    X = 400, Y = 100, Width = 250, BaseHeight = 240, Visible = false, -- Increased height for new button
     Dragging = false, DragOffset = {x = 0, y = 0},
     CurrentCategory = "Stonewake" 
 }
@@ -96,13 +105,14 @@ local EquipDebounce = 0
 local LastMineClick = 0
 local TargetLocked = false
 
+-- STATE MANAGEMENT
+local IsSelling = false
+
 -- ============================================================================
--- 2. SAFETY HELPERS
+-- 2. SAFETY & UI HELPERS
 -- ============================================================================
 
-local function IsValid(Obj)
-    return Obj and Obj.Parent
-end
+local function IsValid(Obj) return Obj and Obj.Parent end
 
 local function SafeGetAttribute(Obj, Attr)
     if not IsValid(Obj) then return nil end
@@ -126,7 +136,6 @@ end
 
 local function GetPosition(Obj)
     if not IsValid(Obj) then return nil end
-    -- [FIX] Use ClassName check instead of IsA for stability
     if Obj.ClassName == "Model" then
         if Obj.PrimaryPart then return Obj.PrimaryPart.Position end
         local kids = Obj:GetChildren()
@@ -150,36 +159,72 @@ local function IsVolcanic(Rock)
     return false
 end
 
+-- // NEW: UI FINDER HELPERS //
+local function GetObject(pathStr)
+    local segments = pathStr:split(".")
+    local current = game
+    for i, name in ipairs(segments) do
+        if i == 1 and name == "game" then
+        elseif current == game and name == "Players" then
+            current = Players
+        elseif current == Players and name ~= "LocalPlayer" then
+            current = current.LocalPlayer
+        else
+            local nextObj = current:FindFirstChild(name)
+            if not nextObj then return nil end
+            current = nextObj
+        end
+    end
+    return current
+end
+
+local function GetTextMemory(obj)
+    if not obj then return "" end
+    if memory and memory.readstring then
+        return memory.readstring(obj, 3648) or ""
+    else
+        return obj.Text
+    end
+end
+
+local function ClickObject(obj)
+    if not obj then return false end
+    local absPos = obj.AbsolutePosition
+    local absSize = obj.AbsoluteSize
+    if absPos and absSize then
+        local centerX = absPos.X + (absSize.X / 2)
+        local centerY = absPos.Y + (absSize.Y / 2)
+        if mouse1click and MouseService then
+            mouse1click()
+            MouseService:SetMouseLocation(centerX, centerY)
+            return true
+        end
+    end
+    return false
+end
+
 -- ============================================================================
 -- 3. INTELLIGENT ORE DETECTION
 -- ============================================================================
 
 local function GetRevealedOreType(Rock)
     if not IsValid(Rock) then return nil end
-    
-    -- Method 1: Attribute on Rock
     local Attr = SafeGetAttribute(Rock, "Ore")
     if Attr and Attr ~= "" then return tostring(Attr) end
-    
-    -- Method 2: Child Model named "Ore" with Attribute
     local OreModel = Rock:FindFirstChild("Ore")
     if OreModel then
         local ChildAttr = SafeGetAttribute(OreModel, "Ore")
         if ChildAttr and ChildAttr ~= "" then return tostring(ChildAttr) end
     end
-    
-    return nil -- Ore is still hidden
+    return nil 
 end
 
 local function IsOreWanted(CurrentOre)
     if not CurrentOre then return false end
     CurrentOre = tostring(CurrentOre)
-    
     if Config.FilterWhitelist[CurrentOre] then return true end
-    
     local NoSpace = string.gsub(CurrentOre, " ", "")
     if Config.FilterWhitelist[NoSpace] then return true end
-    
     for whitelistedOre, enabled in pairs(Config.FilterWhitelist) do
         if enabled then
             local CleanWL = string.gsub(whitelistedOre, " ", "")
@@ -265,26 +310,30 @@ local function FindNearestRock()
     local Closest = nil
     local MinDist = 999999
 
-    -- 1. PRIORITY VOLCANIC (Global or Local Scope)
     if Config.PriorityVolcanic then
         local Volcanic = FindVolcanicRock()
         if Volcanic then return Volcanic end
     end
 
-    -- 2. STANDARD SEARCH
     for _, Rock in ipairs(ActiveRocks) do
         local RName = SafeGetName(Rock)
         if RName and EnabledRocks[RName] == true then
             
-            -- [CRITICAL LOGIC] "Mine then Check"
-            -- 1. Check if Ore is ALREADY revealed
             local RevealedOre = GetRevealedOreType(Rock)
-            
             local IsValidCandidate = true
+            
             if Config.FilterEnabled and RevealedOre then
-                -- Ore is visible. Is it trash?
-                if not IsOreWanted(RevealedOre) then
-                    IsValidCandidate = false -- Skip this rock, we already know it's bad
+                -- [LOGIC UPDATE] Check if we should apply filter
+                local ApplyFilter = true
+                
+                if Config.FilterVolcanicOnly and not IsVolcanic(Rock) then
+                    ApplyFilter = false -- Don't filter non-volcanic rocks
+                end
+                
+                if ApplyFilter then
+                    if not IsOreWanted(RevealedOre) then
+                        IsValidCandidate = false 
+                    end
                 end
             end
             
@@ -362,37 +411,131 @@ local function SkyHopMove(RootPart, GoalPos, DeltaTime)
 end
 
 -- ============================================================================
--- 5. SCANNERS (MINING & ESP) - [FIXED CRASH]
+-- 5. AUTO SELL SYSTEM
+-- ============================================================================
+
+local function PressE()
+    if keypress then
+        keypress(0x45) 
+        task.wait(0.05)
+        keyrelease(0x45)
+    else
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    end
+end
+
+local function PerformAutoSell()
+    if IsSelling then return end 
+    if not Config.AutoSell then return end
+    
+    local Path_Capacity = "game.Players.lugiabinh.PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
+    local capObj = GetObject(Path_Capacity)
+    
+    if not capObj then return end 
+    
+    local text = GetTextMemory(capObj)
+    local current, max = text:match("(%d+)/(%d+)")
+    
+    if current and max and tonumber(current) >= tonumber(max) then
+        IsSelling = true
+        CurrentTarget = nil 
+        TargetLocked = false
+        
+        local Char = LocalPlayer.Character
+        local Root = Char and Char:FindFirstChild("HumanoidRootPart")
+        if Root then
+            local arrived = false
+            while not arrived and Config.AutoSell and Root.Parent do
+                arrived = SkyHopMove(Root, Config.MerchantPos, 0.03)
+                task.wait(0.03)
+            end
+        end
+        
+        local Path_Billboard = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard"
+        local bb = GetObject(Path_Billboard)
+        local startInteract = os.clock()
+        
+        while (not bb or not bb.Visible) and (os.clock() - startInteract < 10) do
+            PressE()
+            task.wait(0.5)
+            bb = GetObject(Path_Billboard)
+        end
+        task.wait(0.5)
+        
+        local Path_DialogueBtn   = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard.Response.Button"
+        local Path_SellUI        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell"
+        local Path_SelectAll     = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll"
+        local Path_SelectTitle   = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll.Frame.Title"
+        local Path_Accept        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.Accept"
+        
+        -- Step 1
+        local timeout = 0
+        while timeout < 20 do
+            local sellUI = GetObject(Path_SellUI)
+            if sellUI and sellUI.Visible then break end
+            local diagBtn = GetObject(Path_DialogueBtn)
+            if diagBtn then ClickObject(diagBtn) end
+            task.wait(0.5); timeout = timeout + 1
+        end
+        -- Step 2
+        timeout = 0
+        while timeout < 20 do
+            local titleObj = GetObject(Path_SelectTitle)
+            local selectBtn = GetObject(Path_SelectAll)
+            if titleObj then
+                local txt = GetTextMemory(titleObj)
+                if txt == "Unselect All" then break end
+                if selectBtn then ClickObject(selectBtn) end
+            end
+            task.wait(0.5); timeout = timeout + 1
+        end
+        -- Step 3
+        timeout = 0
+        while timeout < 20 do
+            local bb2 = GetObject(Path_Billboard)
+            if bb2 and bb2.Visible then break end
+            local accBtn = GetObject(Path_Accept)
+            if accBtn then ClickObject(accBtn) end
+            task.wait(0.5); timeout = timeout + 1
+        end
+        -- Step 4
+        timeout = 0
+        while timeout < 20 do
+             local bb3 = GetObject(Path_Billboard)
+             if not bb3 or not bb3.Visible then break end
+             local diagBtn = GetObject(Path_DialogueBtn)
+             if diagBtn then ClickObject(diagBtn) end
+             task.wait(0.5); timeout = timeout + 1
+        end
+        
+        IsSelling = false
+    end
+end
+
+-- ============================================================================
+-- 6. SCANNERS
 -- ============================================================================
 
 local function PerformScan()
-    -- 1. Validate Main Folder
     local MainFolder = Workspace:FindFirstChild(Config.FolderName)
     if not MainFolder then return end 
     
-    -- 2. Determine Target Folder
     local ScanTarget = MainFolder
     if Config.OnlyLava then
         local Lava = MainFolder:FindFirstChild(Config.LavaFolder)
-        if Lava then 
-            ScanTarget = Lava 
-        else
-            ActiveRocks = {}
-            return
-        end
+        if Lava then ScanTarget = Lava else ActiveRocks = {}; return end
     end
     
-    -- 3. Scan
     local FoundInstances = {}
     local Descendants = ScanTarget:GetDescendants()
     
     for _, Obj in ipairs(Descendants) do
-        -- [FIX] Replaced IsA("Model") with ClassName check to prevent error
         if Obj.ClassName == "Model" then
             local H = Obj:GetAttribute("Health")
             if H and tonumber(H) > 0 then
                 table.insert(FoundInstances, Obj)
-                
                 local N = Obj.Name
                 if not RockNamesSet[N] then
                     RockNamesSet[N] = true
@@ -409,39 +552,29 @@ end
 task.spawn(function()
     while true do
         PerformScan() 
-        
+        task.spawn(PerformAutoSell)
         if Config.EspEnabled then
             local FoundOres = {}
             local Target = Workspace:FindFirstChild(Config.FolderName)
-            if Config.OnlyLava and Target then
-                Target = Target:FindFirstChild(Config.LavaFolder)
-            end
+            if Config.OnlyLava and Target then Target = Target:FindFirstChild(Config.LavaFolder) end
 
             if Target then
                 local Descendants = Target:GetDescendants()
                 for _, Obj in ipairs(Descendants) do
-                    if Obj.Name == "Ore" then
-                        table.insert(FoundOres, Obj)
-                    end
+                    if Obj.Name == "Ore" then table.insert(FoundOres, Obj) end
                 end
                 ActiveOres = FoundOres
             end
         else
             ActiveOres = {}
         end
-        
         task.wait(Config.AutoScanRate)
     end
 end)
 
 -- ============================================================================
--- 6. RENDER LOOP (DUAL WINDOW UI)
+-- 7. RENDER LOOP
 -- ============================================================================
-
-local function DrawButton(UI_Obj, RelX, RelY, Width, Height, Text, Color, IsToggle)
-    DrawingImmediate.FilledRectangle(vector.create(UI_Obj.X + RelX, UI_Obj.Y + RelY, 0), vector.create(Width, Height, 0), Color, 1)
-    DrawingImmediate.Text(vector.create(UI_Obj.X + RelX + (Width/2) - (IsToggle and 0 or (#Text*3)), UI_Obj.Y + RelY + 5, 0), 16, Colors.Text, 1, Text, true, nil)
-end
 
 local function UpdateLoop()
     GarbageCollect() 
@@ -451,7 +584,7 @@ local function UpdateLoop()
     local IsLeftDown = false
     if isleftpressed then IsLeftDown = isleftpressed() end
 
-    -- --- DRAG LOGIC ---
+    -- DRAG LOGIC
     if IsLeftDown then
         if not MainUI.Dragging and not FilterUI.Dragging then
             if MainUI.Visible and IsMouseInRect(MousePos, MainUI.X, MainUI.Y, MainUI.Width, 30) then
@@ -469,12 +602,9 @@ local function UpdateLoop()
     -- TOGGLE BUTTON
     DrawingImmediate.FilledRectangle(vector.create(MainUI.ToggleBtn.X, MainUI.ToggleBtn.Y, 0), vector.create(MainUI.ToggleBtn.W, MainUI.ToggleBtn.H, 0), MainUI.Visible and Colors.On or Colors.Off, 1)
     DrawingImmediate.Text(vector.create(MainUI.ToggleBtn.X + 20, MainUI.ToggleBtn.Y + 12, 0), 14, Color3.new(0,0,0), 1, "Ore", true, nil)
-    
     if Clicked and IsMouseInRect(MousePos, MainUI.ToggleBtn.X, MainUI.ToggleBtn.Y, MainUI.ToggleBtn.W, MainUI.ToggleBtn.H) then MainUI.Visible = not MainUI.Visible end
 
-    -- ===========================
     -- MAIN WINDOW
-    -- ===========================
     if MainUI.Visible then
         local ItemCount = math.max(1, #RockList)
         local TotalHeight = MainUI.BaseHeight + (ItemCount * 22) + 20
@@ -491,39 +621,27 @@ local function UpdateLoop()
         end
 
         MainBtn(Config.MainEnabled and "FARMING: ON" or "FARMING: OFF", Config.MainEnabled and Colors.On or Colors.Off, function() 
-            Config.MainEnabled = not Config.MainEnabled; 
-            CurrentTarget = nil 
-            TargetLocked = false
+            Config.MainEnabled = not Config.MainEnabled; CurrentTarget = nil; TargetLocked = false
         end)
         
         local LavaTxt = Config.OnlyLava and "ONLY LAVA: ON" or "ONLY LAVA: OFF"
         MainBtn(LavaTxt, Config.OnlyLava and Colors.On or Colors.Off, function() 
-            Config.OnlyLava = not Config.OnlyLava 
-            ActiveRocks = {}
-            ActiveOres = {}
-            RockNamesSet = {}
-            RockList = {}
-            CurrentTarget = nil
-            TargetLocked = false
+            Config.OnlyLava = not Config.OnlyLava; ActiveRocks = {}; ActiveOres = {}; RockNamesSet = {}; RockList = {}; CurrentTarget = nil; TargetLocked = false
         end)
 
         local PrioTxt = Config.PriorityVolcanic and "PRIO VOLCANIC: ON" or "PRIO VOLCANIC: OFF"
         MainBtn(PrioTxt, Config.PriorityVolcanic and Colors.On or Colors.Off, function()
-            Config.PriorityVolcanic = not Config.PriorityVolcanic
-            CurrentTarget = nil 
-            TargetLocked = false
+            Config.PriorityVolcanic = not Config.PriorityVolcanic; CurrentTarget = nil; TargetLocked = false
         end)
 
-        -- Mining Position Toggle
         local PosTxt = "MINE POS: " .. (Config.MiningPosition == "Under" and "UNDER" or "ABOVE")
         MainBtn(PosTxt, Colors.Btn, function()
-            if Config.MiningPosition == "Under" then
-                Config.MiningPosition = "Above"
-            else
-                Config.MiningPosition = "Under"
-            end
+            Config.MiningPosition = (Config.MiningPosition == "Under") and "Above" or "Under"
             CurrentTarget = nil 
         end)
+        
+        local SellTxt = Config.AutoSell and "AUTO SELL: ON" or "AUTO SELL: OFF"
+        MainBtn(SellTxt, Config.AutoSell and Colors.On or Colors.Off, function() Config.AutoSell = not Config.AutoSell end)
 
         MainBtn(Config.EspEnabled and "ORE ESP: ON" or "ORE ESP: OFF", Config.EspEnabled and Colors.On or Colors.Off, function() Config.EspEnabled = not Config.EspEnabled end)
         MainBtn(Config.AutoEquip and "Auto Pickaxe: ON" or "Auto Pickaxe: OFF", Config.AutoEquip and Colors.On or Colors.Off, function() Config.AutoEquip = not Config.AutoEquip end)
@@ -538,17 +656,13 @@ local function UpdateLoop()
             DrawingImmediate.FilledRectangle(vector.create(MainUI.X + 10, MainUI.Y + Y, 0), vector.create(MainUI.Width - 20, 20, 0), IsOn and Colors.On or Colors.Off, 1)
             DrawingImmediate.Text(vector.create(MainUI.X + 20, MainUI.Y + Y + 2, 0), 14, Colors.Text, 1, Name, false, nil)
             if Clicked and IsMouseInRect(MousePos, MainUI.X + 10, MainUI.Y + Y, MainUI.Width - 20, 20) then
-                EnabledRocks[Name] = not EnabledRocks[Name]
-                CurrentTarget = nil
-                TargetLocked = false
+                EnabledRocks[Name] = not EnabledRocks[Name]; CurrentTarget = nil; TargetLocked = false
             end
             Y = Y + 22
         end
     end
 
-    -- ===========================
     -- FILTER WINDOW
-    -- ===========================
     if FilterUI.Visible then
         local CatList = OreDatabase[FilterUI.CurrentCategory] or {}
         local F_TotalHeight = FilterUI.BaseHeight + (#CatList * 22)
@@ -557,14 +671,23 @@ local function UpdateLoop()
         DrawingImmediate.OutlinedText(vector.create(FilterUI.X + 10, FilterUI.Y + 8, 0), 16, Colors.Text, 1, "Ore Filter", false, nil)
         
         local FY = 35
+        -- Filter Enabled Toggle
         local F_Txt = Config.FilterEnabled and "FILTER: ACTIVE" or "FILTER: DISABLED"
         local F_Col = Config.FilterEnabled and Colors.On or Colors.Off
-        
         DrawingImmediate.FilledRectangle(vector.create(FilterUI.X + 10, FilterUI.Y + FY, 0), vector.create(FilterUI.Width - 20, 25, 0), F_Col, 1)
         DrawingImmediate.Text(vector.create(FilterUI.X + 60, FilterUI.Y + FY + 5, 0), 16, Colors.Text, 1, F_Txt, false, nil)
         if Clicked and IsMouseInRect(MousePos, FilterUI.X + 10, FilterUI.Y + FY, FilterUI.Width - 20, 25) then Config.FilterEnabled = not Config.FilterEnabled end
+        FY = FY + 30
+
+        -- [NEW BUTTON] FILTER VOLCANIC ONLY
+        local V_Txt = Config.FilterVolcanicOnly and "VOLCANIC ONLY: ON" or "VOLCANIC ONLY: OFF"
+        local V_Col = Config.FilterVolcanicOnly and Colors.On or Colors.Off
+        DrawingImmediate.FilledRectangle(vector.create(FilterUI.X + 10, FilterUI.Y + FY, 0), vector.create(FilterUI.Width - 20, 25, 0), V_Col, 1)
+        DrawingImmediate.Text(vector.create(FilterUI.X + 60, FilterUI.Y + FY + 5, 0), 16, Colors.Text, 1, V_Txt, false, nil)
+        if Clicked and IsMouseInRect(MousePos, FilterUI.X + 10, FilterUI.Y + FY, FilterUI.Width - 20, 25) then Config.FilterVolcanicOnly = not Config.FilterVolcanicOnly end
         FY = FY + 35
 
+        -- Categories
         local btnW = (FilterUI.Width - 30) / 3 
         local Cats = {"Stonewake", "Forgotten", "Goblin"}
         for i, Cat in ipairs(Cats) do
@@ -584,17 +707,12 @@ local function UpdateLoop()
             DrawingImmediate.FilledRectangle(vector.create(FilterUI.X + 10, FilterUI.Y + FY, 0), vector.create(FilterUI.Width - 20, 20, 0), IsWhitelisted and Colors.On or Colors.Off, 1)
             DrawingImmediate.Text(vector.create(FilterUI.X + 20, FilterUI.Y + FY + 2, 0), 14, Colors.Text, 1, OreName, false, nil)
             if Clicked and IsMouseInRect(MousePos, FilterUI.X + 10, FilterUI.Y + FY, FilterUI.Width - 20, 20) then
-                Config.FilterWhitelist[OreName] = not Config.FilterWhitelist[OreName]
-                CurrentTarget = nil 
-                TargetLocked = false
+                Config.FilterWhitelist[OreName] = not Config.FilterWhitelist[OreName]; CurrentTarget = nil; TargetLocked = false
             end
             FY = FY + 22
         end
     end
 
-    -- ===========================
-    -- ORE ESP LOGIC
-    -- ===========================
     if Config.EspEnabled then
         for _, OreObj in ipairs(ActiveOres) do
             if IsValid(OreObj) then
@@ -604,15 +722,7 @@ local function UpdateLoop()
                     if Pos then
                         local ScreenPos, Visible = Camera:WorldToScreenPoint(Pos)
                         if Visible then
-                            DrawingImmediate.OutlinedText(
-                                vector.create(ScreenPos.X, ScreenPos.Y, 0),
-                                Config.EspTextSize,
-                                Config.EspTextColor,
-                                1,
-                                "[" .. tostring(OreName) .. "]",
-                                true,
-                                nil
-                            )
+                            DrawingImmediate.OutlinedText(vector.create(ScreenPos.X, ScreenPos.Y, 0), Config.EspTextSize, Config.EspTextColor, 1, "[" .. tostring(OreName) .. "]", true, nil)
                         end
                     end
                 end
@@ -620,99 +730,75 @@ local function UpdateLoop()
         end
     end
 
-    -- C. FARM LOGIC
+    if IsSelling then return end
+
     local Char = LocalPlayer.Character
     if Char then CheckAutoEquip(Char) end
 
     if Char and Char:FindFirstChild("HumanoidRootPart") then
         local MyRoot = Char.HumanoidRootPart
-        
         if Config.MainEnabled then
             if CurrentTarget then
-                if not IsValid(CurrentTarget) then 
-                    CurrentTarget = nil 
-                    TargetLocked = false
-                    return 
-                end
-                
+                if not IsValid(CurrentTarget) then CurrentTarget = nil; TargetLocked = false; return end
                 local HP = GetRockHealth(CurrentTarget)
-                if HP <= 0 then 
-                    CurrentTarget = nil 
-                    TargetLocked = false
-                    return 
-                end
+                if HP <= 0 then CurrentTarget = nil; TargetLocked = false; return end
 
                 local MaxHP = GetRockMaxHealth(CurrentTarget)
                 local OrePos = GetPosition(CurrentTarget)
-                if not OrePos then 
-                    CurrentTarget = nil 
-                    TargetLocked = false
-                    return 
-                end
+                if not OrePos then CurrentTarget = nil; TargetLocked = false; return end
                 
                 local Y_Offset = (Config.MiningPosition == "Under") and -Config.UnderOffset or Config.AboveOffset
                 local GoalPos = vector.create(OrePos.x, OrePos.y + Y_Offset, OrePos.z)
                 
                 local DistToRock = vector.magnitude(MyRoot.Position - OrePos)
                 if DistToRock > 15 and MaxHP > 0 and HP < MaxHP and not TargetLocked then
-                      CurrentTarget = nil 
-                      return
+                      CurrentTarget = nil; return
                 end
 
-                -- [NEW] PRIORITY INTERRUPT LOGIC
                 if Config.PriorityVolcanic and not IsVolcanic(CurrentTarget) then
                     local PriorityRock = FindVolcanicRock()
-                    if PriorityRock then
-                        CurrentTarget = PriorityRock
-                        TargetLocked = false
-                        return
-                    end
+                    if PriorityRock then CurrentTarget = PriorityRock; TargetLocked = false; return end
                 end
 
-                -- [CRITICAL] REAL-TIME FILTER CHECK
+                -- [CRITICAL UPDATE] LOGIC FOR VOLCANIC FILTER
                 local RevealedOre = GetRevealedOreType(CurrentTarget)
                 if Config.FilterEnabled and RevealedOre then
-                    if not IsOreWanted(RevealedOre) then
-                        CurrentTarget = nil
-                        TargetLocked = false
-                        return
+                    local ApplyFilter = true
+                    if Config.FilterVolcanicOnly and not IsVolcanic(CurrentTarget) then
+                        ApplyFilter = false
+                    end
+                    
+                    if ApplyFilter then
+                        if not IsOreWanted(RevealedOre) then
+                            CurrentTarget = nil; TargetLocked = false; return
+                        end
                     end
                 end
 
-                -- MOVE & MINE
                 local Diff = MyRoot.Position - GoalPos
                 local Dist = vector.magnitude(Diff)
                 
                 if Dist > Config.MineDistance then
                     SkyHopMove(MyRoot, GoalPos, DeltaTime)
                 else
-                    -- ARRIVED AT ROCK
                     local CurrentHP = GetRockHealth(CurrentTarget)
                     local MaxHP_Real = GetRockMaxHealth(CurrentTarget)
 
-                    if CurrentHP <= 0 then
-                        CurrentTarget = nil
-                        TargetLocked = false
-                        return
-                    end
+                    if CurrentHP <= 0 then CurrentTarget = nil; TargetLocked = false; return end
 
-                    -- [FIX] Check freshness ONCE (if not locked yet)
                     if not TargetLocked then
                         if MaxHP_Real > 0 and CurrentHP < MaxHP_Real then
-                            CurrentTarget = nil -- Abandon damaged rock
-                            return
+                            CurrentTarget = nil; return
                         else
-                            TargetLocked = true -- Commit to this rock
+                            TargetLocked = true
                         end
                     end
 
-                    -- If passed, mine it
                     local LookAt = Vector3.new(OrePos.x, OrePos.y, OrePos.z)
                     local Pos = Vector3.new(GoalPos.x, GoalPos.y, GoalPos.z)
                     MyRoot.CFrame = CFrame.lookAt(Pos, LookAt)
                     MyRoot.Velocity = vector.zero
                     
-                    -- CLICK LOGIC WITH DELAY
                     if os.clock() - LastMineClick > Config.ClickDelay then
                         if mouse1click then mouse1click() end
                         LastMineClick = os.clock()
@@ -720,22 +806,18 @@ local function UpdateLoop()
                 end
             else
                 CurrentTarget = FindNearestRock()
-                TargetLocked = false -- Reset lock for new target
+                TargetLocked = false 
             end
         end
     end
 end
 
--- ============================================================================
--- FAIL-SAFE CONNECTIONS
--- ============================================================================
 local Connected = false
 if RunService then
     pcall(function() RunService.Heartbeat:Connect(UpdateLoop); Connected = true end)
     if not Connected then pcall(function() RunService.RenderStepped:Connect(UpdateLoop); Connected = true end) end
     if not Connected then pcall(function() RunService.Render:Connect(UpdateLoop); Connected = true end) end
 end
-
 if not Connected then
     warn("Using Manual Loop")
     task.spawn(function() while true do UpdateLoop() task.wait(0.03) end end)
