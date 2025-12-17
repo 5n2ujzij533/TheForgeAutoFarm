@@ -1,5 +1,4 @@
 --!optimize 2
--- 1. LOAD LIBRARY (CRITICAL FOR UI POSITIONS)
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Sploiter13/severefuncs/refs/heads/main/merge.lua"))();
 
 -- Services
