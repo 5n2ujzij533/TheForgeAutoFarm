@@ -48,14 +48,14 @@ local Config = {
     
     -- MINING
     MineDistance = 10,        
-    UnderOffset = 7,          
-    AboveOffset = 7,
+    UnderOffset = 6,          
+    AboveOffset = 6,
     MiningPosition = "Under", 
-    ClickDelay = 0.25, 
+    ClickDelay = 0.2, 
     
     -- FILTER
     FilterEnabled = false,    
-    FilterVolcanicOnly = false, -- [NEW]
+    FilterVolcanicOnly = false,
     FilterWhitelist = {}, 
     
     -- SYSTEM
@@ -66,13 +66,14 @@ local Config = {
     EspEnabled = false,      
     OnlyLava = false,
     PriorityVolcanic = false,
-    TravelSpeed = 300,      
-    InstantTP_Range = 60,
+    TravelSpeed = 270,      
+    InstantTP_Range = 55,
     AutoEquip = false,
     
     -- AUTO SELL
     AutoSell = false,
     MerchantPos = Vector3.new(-132.07, 21.61, -20.92),
+    SellTimeout = 60,
     
     EspTextColor = Color3.fromRGB(100, 255, 100),
     EspTextSize = 16,
@@ -85,7 +86,7 @@ local MainUI = {
 }
 
 local FilterUI = {
-    X = 400, Y = 100, Width = 250, BaseHeight = 240, Visible = false, -- Increased height for new button
+    X = 400, Y = 100, Width = 250, BaseHeight = 240, Visible = false,
     Dragging = false, DragOffset = {x = 0, y = 0},
     CurrentCategory = "Stonewake" 
 }
@@ -112,7 +113,9 @@ local IsSelling = false
 -- 2. SAFETY & UI HELPERS
 -- ============================================================================
 
-local function IsValid(Obj) return Obj and Obj.Parent end
+local function IsValid(Obj)
+    return Obj and Obj.Parent
+end
 
 local function SafeGetAttribute(Obj, Attr)
     if not IsValid(Obj) then return nil end
@@ -125,12 +128,14 @@ local function SafeGetName(Obj)
 end
 
 local function GetRockHealth(Rock)
-    local H = SafeGetAttribute(Rock, "Health")
+    if not IsValid(Rock) then return 0 end
+    local H = Rock:GetAttribute("Health")
     return (H and tonumber(H)) or 0 
 end
 
 local function GetRockMaxHealth(Rock)
-    local H = SafeGetAttribute(Rock, "MaxHealth")
+    if not IsValid(Rock) then return 0 end
+    local H = Rock:GetAttribute("MaxHealth")
     return (H and tonumber(H)) or 0 
 end
 
@@ -141,7 +146,9 @@ local function GetPosition(Obj)
         local kids = Obj:GetChildren()
         for i=1, #kids do
             local child = kids[i]
-            if child.ClassName == "Part" or child.ClassName == "MeshPart" then return child.Position end
+            if child.ClassName == "Part" or child.ClassName == "MeshPart" then 
+                return child.Position 
+            end
         end
     elseif string.find(Obj.ClassName, "Part") then 
         return Obj.Position 
@@ -151,9 +158,9 @@ end
 
 local function IsVolcanic(Rock)
     if not IsValid(Rock) then return false end
-    local N = SafeGetName(Rock)
+    local N = Rock.Name
     if N == "Volcanic Rock" then return true end
-    local Attr = SafeGetAttribute(Rock, "Ore")
+    local Attr = Rock:GetAttribute("Ore")
     if Attr and tostring(Attr) == "Volcanic Rock" then return true end
     if Rock:FindFirstChild("Volcanic Rock") then return true end
     return false
@@ -209,26 +216,30 @@ end
 
 local function GetRevealedOreType(Rock)
     if not IsValid(Rock) then return nil end
-    local Attr = SafeGetAttribute(Rock, "Ore")
+    local Attr = Rock:GetAttribute("Ore")
     if Attr and Attr ~= "" then return tostring(Attr) end
     local OreModel = Rock:FindFirstChild("Ore")
     if OreModel then
-        local ChildAttr = SafeGetAttribute(OreModel, "Ore")
+        local ChildAttr = OreModel:GetAttribute("Ore")
         if ChildAttr and ChildAttr ~= "" then return tostring(ChildAttr) end
     end
     return nil 
 end
 
+-- [FIXED] Robust Filter matching (ignores case and spaces)
 local function IsOreWanted(CurrentOre)
     if not CurrentOre then return false end
-    CurrentOre = tostring(CurrentOre)
-    if Config.FilterWhitelist[CurrentOre] then return true end
-    local NoSpace = string.gsub(CurrentOre, " ", "")
-    if Config.FilterWhitelist[NoSpace] then return true end
-    for whitelistedOre, enabled in pairs(Config.FilterWhitelist) do
-        if enabled then
-            local CleanWL = string.gsub(whitelistedOre, " ", "")
-            if CleanWL == NoSpace then return true end
+    
+    -- Normalize: Lowercase and remove spaces
+    local function Clean(s)
+        return string.lower(string.gsub(s, " ", ""))
+    end
+    
+    local Target = Clean(tostring(CurrentOre))
+    
+    for Name, Enabled in pairs(Config.FilterWhitelist) do
+        if Enabled then
+            if Clean(Name) == Target then return true end
         end
     end
     return false
@@ -316,18 +327,20 @@ local function FindNearestRock()
     end
 
     for _, Rock in ipairs(ActiveRocks) do
-        local RName = SafeGetName(Rock)
+        -- [CRASH FIX] Validation Check before reading properties
+        if not IsValid(Rock) then continue end
+        
+        local RName = Rock.Name
         if RName and EnabledRocks[RName] == true then
             
             local RevealedOre = GetRevealedOreType(Rock)
             local IsValidCandidate = true
             
             if Config.FilterEnabled and RevealedOre then
-                -- [LOGIC UPDATE] Check if we should apply filter
                 local ApplyFilter = true
                 
                 if Config.FilterVolcanicOnly and not IsVolcanic(Rock) then
-                    ApplyFilter = false -- Don't filter non-volcanic rocks
+                    ApplyFilter = false 
                 end
                 
                 if ApplyFilter then
@@ -443,11 +456,23 @@ local function PerformAutoSell()
         CurrentTarget = nil 
         TargetLocked = false
         
+        -- [NEW] FAILSAFE TIMEOUT START
+        local StartTime = os.clock()
+        local function CheckTimeout()
+            if os.clock() - StartTime > Config.SellTimeout then
+                warn(">> AUTO SELL STUCK! Restarting process...")
+                IsSelling = false
+                return true
+            end
+            return false
+        end
+
         local Char = LocalPlayer.Character
         local Root = Char and Char:FindFirstChild("HumanoidRootPart")
         if Root then
             local arrived = false
             while not arrived and Config.AutoSell and Root.Parent do
+                if CheckTimeout() then return end -- Failsafe
                 arrived = SkyHopMove(Root, Config.MerchantPos, 0.03)
                 task.wait(0.03)
             end
@@ -458,6 +483,7 @@ local function PerformAutoSell()
         local startInteract = os.clock()
         
         while (not bb or not bb.Visible) and (os.clock() - startInteract < 10) do
+            if CheckTimeout() then return end -- Failsafe
             PressE()
             task.wait(0.5)
             bb = GetObject(Path_Billboard)
@@ -473,6 +499,7 @@ local function PerformAutoSell()
         -- Step 1
         local timeout = 0
         while timeout < 20 do
+            if CheckTimeout() then return end
             local sellUI = GetObject(Path_SellUI)
             if sellUI and sellUI.Visible then break end
             local diagBtn = GetObject(Path_DialogueBtn)
@@ -482,6 +509,7 @@ local function PerformAutoSell()
         -- Step 2
         timeout = 0
         while timeout < 20 do
+            if CheckTimeout() then return end
             local titleObj = GetObject(Path_SelectTitle)
             local selectBtn = GetObject(Path_SelectAll)
             if titleObj then
@@ -494,6 +522,7 @@ local function PerformAutoSell()
         -- Step 3
         timeout = 0
         while timeout < 20 do
+            if CheckTimeout() then return end
             local bb2 = GetObject(Path_Billboard)
             if bb2 and bb2.Visible then break end
             local accBtn = GetObject(Path_Accept)
@@ -503,6 +532,7 @@ local function PerformAutoSell()
         -- Step 4
         timeout = 0
         while timeout < 20 do
+             if CheckTimeout() then return end
              local bb3 = GetObject(Path_Billboard)
              if not bb3 or not bb3.Visible then break end
              local diagBtn = GetObject(Path_DialogueBtn)
@@ -533,15 +563,18 @@ local function PerformScan()
     
     for _, Obj in ipairs(Descendants) do
         if Obj.ClassName == "Model" then
-            local H = Obj:GetAttribute("Health")
-            if H and tonumber(H) > 0 then
-                table.insert(FoundInstances, Obj)
-                local N = Obj.Name
-                if not RockNamesSet[N] then
-                    RockNamesSet[N] = true
-                    table.insert(RockList, N)
-                    table.sort(RockList) 
-                    if EnabledRocks[N] == nil then EnabledRocks[N] = false end
+            -- [CRASH FIX] Validation
+            if IsValid(Obj) then
+                local H = Obj:GetAttribute("Health")
+                if H and tonumber(H) > 0 then
+                    table.insert(FoundInstances, Obj)
+                    local N = Obj.Name
+                    if not RockNamesSet[N] then
+                        RockNamesSet[N] = true
+                        table.insert(RockList, N)
+                        table.sort(RockList) 
+                        if EnabledRocks[N] == nil then EnabledRocks[N] = false end
+                    end
                 end
             end
         end
