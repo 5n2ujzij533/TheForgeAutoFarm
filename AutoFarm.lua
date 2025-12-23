@@ -34,8 +34,8 @@ local Config = {
     MerchantPos = Vector3.new(-132.07, 21.61, -20.92),
     SellTimeout = 60, -- Failsafe Timeout
     
-    TravelSpeed = 300,     
-    InstantTP_Range = 70,
+    TravelSpeed = 260,     
+    InstantTP_Range = 55,
     AutoEquip = false,
     
     -- ESP Settings
