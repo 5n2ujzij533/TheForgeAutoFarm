@@ -32,6 +32,7 @@ local Config = {
     -- NEW AUTO SELL CONFIG
     AutoSell = false,
     MerchantPos = Vector3.new(-132.07, 21.61, -20.92),
+    SellTimeout = 60, -- Failsafe Timeout
     
     TravelSpeed = 300,     
     InstantTP_Range = 70,
@@ -271,8 +272,11 @@ local function PerformAutoSell()
     if IsSelling then return end -- already running
     if not Config.AutoSell then return end
     
+    -- [FIX] Dynamic LocalPlayer Path
+    local pName = LocalPlayer.Name
+    local Path_Capacity      = "game.Players."..pName..".PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
+    
     -- 1. CHECK CAPACITY
-    local Path_Capacity = "game.Players.lugiabinh.PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
     local capObj = GetObject(Path_Capacity)
     
     if not capObj then return end -- UI might be closed
@@ -285,23 +289,43 @@ local function PerformAutoSell()
         IsSelling = true
         CurrentTarget = nil 
         
+        -- FAILSAFE SETUP
+        local StartTime = os.clock()
+        local function CheckTimeout()
+            if os.clock() - StartTime > Config.SellTimeout then
+                warn(">> AUTO SELL STUCK! Timeout reached. Resuming farm...")
+                IsSelling = false
+                return true -- Signal to abort
+            end
+            return false
+        end
+
+        -- [FIX] Define Dynamic Paths for Sequence
+        local Path_Billboard     = "game.Players."..pName..".PlayerGui.DialogueUI.ResponseBillboard"
+        local Path_DialogueBtn   = "game.Players."..pName..".PlayerGui.DialogueUI.ResponseBillboard.Response.Button"
+        local Path_SellUI        = "game.Players."..pName..".PlayerGui.Sell.MiscSell"
+        local Path_SelectAll     = "game.Players."..pName..".PlayerGui.Sell.MiscSell.Frame.SelectAll"
+        local Path_SelectTitle   = "game.Players."..pName..".PlayerGui.Sell.MiscSell.Frame.SelectAll.Frame.Title"
+        local Path_Accept        = "game.Players."..pName..".PlayerGui.Sell.MiscSell.Frame.Accept"
+
         -- 2. TRAVEL
         local Char = LocalPlayer.Character
         local Root = Char and Char:FindFirstChild("HumanoidRootPart")
         if Root then
             local arrived = false
             while not arrived and Config.AutoSell and Root.Parent do
+                if CheckTimeout() then return end
                 arrived = SkyHopMove(Root, Config.MerchantPos, 0.03)
                 task.wait(0.03)
             end
         end
         
         -- 3. INTERACT
-        local Path_Billboard = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard"
         local bb = GetObject(Path_Billboard)
         local startInteract = os.clock()
         
         while (not bb or not bb.Visible) and (os.clock() - startInteract < 10) do
+            if CheckTimeout() then return end
             PressE()
             task.wait(0.5)
             bb = GetObject(Path_Billboard)
@@ -310,15 +334,10 @@ local function PerformAutoSell()
         task.wait(0.5)
         
         -- 4. UI SEQUENCE
-        local Path_DialogueBtn   = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard.Response.Button"
-        local Path_SellUI        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell"
-        local Path_SelectAll     = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll"
-        local Path_SelectTitle   = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll.Frame.Title"
-        local Path_Accept        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.Accept"
-        
         -- Step 1: Open Sell UI
         local timeout = 0
         while timeout < 20 do
+            if CheckTimeout() then return end
             local sellUI = GetObject(Path_SellUI)
             if sellUI and sellUI.Visible then break end
             local diagBtn = GetObject(Path_DialogueBtn)
@@ -329,6 +348,7 @@ local function PerformAutoSell()
         -- Step 2: Select All
         timeout = 0
         while timeout < 20 do
+            if CheckTimeout() then return end
             local titleObj = GetObject(Path_SelectTitle)
             local selectBtn = GetObject(Path_SelectAll)
             if titleObj then
@@ -342,6 +362,7 @@ local function PerformAutoSell()
         -- Step 3: Accept
         timeout = 0
         while timeout < 20 do
+            if CheckTimeout() then return end
             local bb2 = GetObject(Path_Billboard)
             if bb2 and bb2.Visible then break end
             local accBtn = GetObject(Path_Accept)
@@ -352,6 +373,7 @@ local function PerformAutoSell()
         -- Step 4: Close Dialogue
         timeout = 0
         while timeout < 20 do
+             if CheckTimeout() then return end
              local bb3 = GetObject(Path_Billboard)
              if not bb3 or not bb3.Visible then break end
              local diagBtn = GetObject(Path_DialogueBtn)
