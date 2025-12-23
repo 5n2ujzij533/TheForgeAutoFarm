@@ -443,7 +443,10 @@ local function PerformAutoSell()
     if IsSelling then return end 
     if not Config.AutoSell then return end
     
-    local Path_Capacity = "game.Players.lugiabinh.PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
+    -- [FIX] DYNAMIC NAME PATH
+    local pName = LocalPlayer.Name
+    local Path_Capacity = "game.Players."..pName..".PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
+    
     local capObj = GetObject(Path_Capacity)
     
     if not capObj then return end 
@@ -456,7 +459,7 @@ local function PerformAutoSell()
         CurrentTarget = nil 
         TargetLocked = false
         
-        -- [NEW] FAILSAFE TIMEOUT START
+        -- FAILSAFE TIMEOUT START
         local StartTime = os.clock()
         local function CheckTimeout()
             if os.clock() - StartTime > Config.SellTimeout then
@@ -478,7 +481,8 @@ local function PerformAutoSell()
             end
         end
         
-        local Path_Billboard = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard"
+        -- [FIX] DYNAMIC BILLBOARD PATH
+        local Path_Billboard = "game.Players."..pName..".PlayerGui.DialogueUI.ResponseBillboard"
         local bb = GetObject(Path_Billboard)
         local startInteract = os.clock()
         
@@ -490,11 +494,12 @@ local function PerformAutoSell()
         end
         task.wait(0.5)
         
-        local Path_DialogueBtn   = "game.Players.lugiabinh.PlayerGui.DialogueUI.ResponseBillboard.Response.Button"
-        local Path_SellUI        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell"
-        local Path_SelectAll     = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll"
-        local Path_SelectTitle   = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.SelectAll.Frame.Title"
-        local Path_Accept        = "game.Players.lugiabinh.PlayerGui.Sell.MiscSell.Frame.Accept"
+        -- [FIX] DYNAMIC UI PATHS
+        local Path_DialogueBtn   = "game.Players."..pName..".PlayerGui.DialogueUI.ResponseBillboard.Response.Button"
+        local Path_SellUI        = "game.Players."..pName..".PlayerGui.Sell.MiscSell"
+        local Path_SelectAll     = "game.Players."..pName..".PlayerGui.Sell.MiscSell.Frame.SelectAll"
+        local Path_SelectTitle   = "game.Players."..pName..".PlayerGui.Sell.MiscSell.Frame.SelectAll.Frame.Title"
+        local Path_Accept        = "game.Players."..pName..".PlayerGui.Sell.MiscSell.Frame.Accept"
         
         -- Step 1
         local timeout = 0
