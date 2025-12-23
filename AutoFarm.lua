@@ -272,7 +272,6 @@ local function PerformAutoSell()
     if IsSelling then return end -- already running
     if not Config.AutoSell then return end
     
-    -- [FIX] Dynamic LocalPlayer Path
     local pName = LocalPlayer.Name
     local Path_Capacity      = "game.Players."..pName..".PlayerGui.Menu.Frame.Frame.Menus.Stash.Capacity.Text"
     
